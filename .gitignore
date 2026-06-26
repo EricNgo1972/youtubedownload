@@ -1,0 +1,14 @@
+# Build output
+bin/
+obj/
+
+# Rider / VS
+.vs/
+.idea/
+*.user
+
+# Downloaded media (in case anyone runs it inside the repo)
+*.mp4
+*.srt
+*.webm
+*.m4a
