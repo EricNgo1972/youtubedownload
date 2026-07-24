@@ -1,9 +1,18 @@
 namespace YoutubeDownloader.Models;
 
-/// <summary>One entry in the download history (persisted to history.json).</summary>
+/// <summary>Where a library track's audio came from.</summary>
+public enum TrackSource { YouTube, Upload }
+
+/// <summary>One track in the library (persisted to history.json). A track's audio
+/// may be a YouTube download or a file the user uploaded — see <see cref="Source"/>.</summary>
 public class DownloadRecord
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
+    /// <summary>How this track entered the library. Records written before this field
+    /// existed deserialize to <see cref="TrackSource.YouTube"/>, which is correct.</summary>
+    public TrackSource Source { get; set; } = TrackSource.YouTube;
+
     public string VideoId { get; set; } = "";
     public string Title { get; set; } = "";
     public string Author { get; set; } = "";

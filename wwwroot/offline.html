@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f1115" />
+    <title>Downloads — My Music</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="My Music" />
+    <link rel="stylesheet" href="/app.css" />
+    <style>
+        /* Downloads page — a pure player of what's on this device. Shares app.css tokens
+           and the now-playing bar (.np-bar), injected by player.js. */
+        .off-wrap { max-width: 720px; margin: 0 auto;
+                    padding: 0 max(16px, env(safe-area-inset-right)) calc(134px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+        .off-head { margin: 10px 0 6px; }
+        .off-head .brand { font-size: 1.15rem; font-weight: 700; display: inline-flex; align-items: center; gap: 8px; }
+        .net { font-size: 12px; padding: 3px 10px; border-radius: 999px; font-weight: 700; }
+        .net.online { background: rgba(52,211,153,.16); color: var(--ok); }
+        .net.offline { background: rgba(255,61,84,.16); color: var(--accent); }
+        .off-sub { font-size: 13px; color: var(--muted); margin: 0 2px 4px; line-height: 1.5; }
+        .off-sub a { color: var(--accent-2); }
+
+        .opl { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 16px; margin-top: 12px; }
+        .opl-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        .opl-name { font-weight: 700; font-size: 17px; line-height: 1.25; word-break: break-word; }
+        .opl-meta { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+        .opl-meta .off-ok { color: var(--ok); font-weight: 600; }
+
+        .opl-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+        .obtn { border: 0; border-radius: 11px; padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer;
+                display: inline-flex; align-items: center; gap: 6px; }
+        .obtn--play { background: var(--ok); color: #052018; }
+        .obtn--play:hover { filter: brightness(1.07); }
+        .obtn--ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+        .obtn--ghost:hover { border-color: var(--muted); }
+        .obtn--ghost.on { border-color: var(--ok); color: var(--ok); background: rgba(52,211,153,.1); }
+
+        .icon-btn { flex: none; width: 34px; height: 34px; border-radius: 9px; border: 0; background: transparent;
+                    color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; }
+        .icon-btn:hover { color: #fff; background: var(--panel-2); }
+        .icon-btn--danger:hover { color: #fff; background: var(--accent); }
+
+        .tracks { list-style: none; margin: 14px 0 0; padding: 0; }
+        .trk { display: flex; align-items: center; gap: 12px; padding: 10px 4px; border-top: 1px solid var(--border); cursor: pointer; }
+        .trk:first-child { border-top: 0; }
+        .trk-btn { flex: none; width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border);
+                   background: transparent; color: var(--ok); font-size: 13px; cursor: pointer; }
+        .trk-btn:hover { border-color: var(--ok); }
+        .trk.playing { color: var(--ok); }
+        .trk.playing .trk-title { font-weight: 600; }
+        .trk.playing .trk-btn { border-color: var(--ok); background: rgba(52,211,153,.12); }
+        .trk-idx { width: 18px; text-align: right; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+        .trk-main { flex: 1; min-width: 0; }
+        .trk-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 15px; }
+        .trk-auth { font-size: 12px; color: var(--muted); margin-top: 1px; }
+
+        .empty { color: var(--muted); font-size: 14px; text-align: center; padding: 44px 16px; line-height: 1.6; }
+        .empty a { color: var(--accent-2); }
+    </style>
+</head>
+<body>
+    <div class="off-wrap">
+        <header class="topbar off-head">
+            <span class="brand">🎵 My Music <span id="net" class="net">…</span></span>
+            <button class="nav-kebab" aria-label="Menu" onclick="ytdlNav.toggle(event)">⋮</button>
+            <nav>
+                <a class="navlink needs-online" href="/">Playlists</a>
+                <a class="navlink needs-online" href="/library">Library</a>
+                <a class="navlink active" href="/offline.html">⬇ Downloads</a>
+            </nav>
+        </header>
+        <p class="off-sub" id="off-sub">Everything here plays offline. Heading out? Open <a class="needs-online" href="/">Playlists</a> to see which lists are downloaded (✓) and grab any you're missing.</p>
+
+        <div id="pwa-slot"></div>
+        <div id="dl-list"></div>
+    </div>
+
+    <script src="/nav.js"></script>
+    <script src="/offline-store.js"></script>
+    <script src="/player.js"></script>
+    <script src="/pwa-install.js"></script>
+    <script src="/offline.js"></script>
+</body>
+</html>

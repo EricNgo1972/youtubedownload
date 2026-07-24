@@ -1,25 +1,20 @@
+@page "/"
 @page "/playlists"
 @rendermode InteractiveServer
 @inject PlaylistService Store
 @inject HistoryService History
+@inject IJSRuntime JS
 
 <PageTitle>Playlists</PageTitle>
 
-<h1>Playlists</h1>
-
-<div class="card">
-    <label class="field-label" for="plname">New playlist</label>
-    <div class="pl-create">
-        <input id="plname" class="text-input" placeholder="e.g. Cultivation stories"
-               @bind="_newName" @bind:event="oninput" />
-        <button class="btn btn-primary" @onclick="Create"
-                disabled="@string.IsNullOrWhiteSpace(_newName)">Create</button>
-    </div>
+<div class="row-between">
+    <h1>Playlists</h1>
+    <button class="btn btn-create" @onclick="OpenCreateDialog">+ New list</button>
 </div>
 
 @if (_playlists.Count == 0)
 {
-    <div class="card hint">No playlists yet. Create one above, then add tracks from your History.</div>
+    <div class="card hint">No playlists yet. Create one above, then add tracks from your <a class="file-link-plain" href="library">Library</a> — upload your own audio or download from YouTube.</div>
 }
 else
 {
@@ -33,7 +28,10 @@ else
                     </button>
                     <span class="pl-head-right">
                         <span class="hint">@pl.RecordIds.Count track(s)</span>
-                        <button class="btn-mini" @onclick="() => Delete(pl.Id)">Delete</button>
+                        <button class="btn-mini dl-toggle" data-download-id="@pl.Id"
+                                onclick="ytdlDownloadToggle('@pl.Id')" title="Download for offline">⬇</button>
+                        <button class="btn-mini pl-add-btn" title="Add tracks" aria-label="Add tracks"
+                                @onclick="() => OpenAddDialog(pl.Id)">+</button>
                     </span>
                 </div>
 
@@ -45,8 +43,9 @@ else
                         @if (playable > 0)
                         {
                             <div class="pl-actions">
-                                <button class="btn-play" onclick="ytdlPlayer.playFirst()">▶ Play all (@playable)</button>
-                                <span class="hint">plays top-to-bottom, auto-advancing</span>
+                                <button class="btn-play" onclick="ytdlPlayer.playFromApi('@pl.Id')">▶ Play all (@playable)</button>
+                                <button class="btn-shuffle" data-shuffle onclick="ytdlPlayer.toggleShuffle()">🔀 Shuffle</button>
+                                <span class="hint">auto-advancing; 🔀 plays in random order</span>
                             </div>
                         }
 
@@ -60,49 +59,30 @@ else
                                 @for (var idx = 0; idx < items.Count; idx++)
                                 {
                                     var it = items[idx];
-                                    <li class="pl-item">
+                                    var trackUrl = it.AudioIndex >= 0 ? $"/stream/{it.RecordId}/{it.AudioIndex}" : null;
+                                    <li class="pl-item" data-track-url="@trackUrl">
                                         <span class="pl-item-title">@it.Title</span>
                                         <span class="pl-item-ctl">
                                             @if (it.AudioIndex >= 0)
                                             {
-                                                <button class="btn-mini" title="Play"
-                                                        onclick="ytdlPlayer.toggle('audio-@it.RecordId')">▶</button>
+                                                <button class="btn-mini btn-p play-glyph" title="Play"
+                                                        onclick="ytdlPlayer.tapTrack('@trackUrl', '@pl.Id')">▶</button>
                                             }
                                             <button class="btn-mini" title="Move up"
                                                     @onclick="() => Move(pl.Id, it.RecordId, -1)" disabled="@(idx == 0)">▲</button>
                                             <button class="btn-mini" title="Move down"
                                                     @onclick="() => Move(pl.Id, it.RecordId, 1)" disabled="@(idx == items.Count - 1)">▼</button>
-                                            <button class="btn-mini" title="Remove"
+                                            <button class="btn-mini btn-x" title="Remove"
                                                     @onclick="() => Remove(pl.Id, it.RecordId)">✕</button>
                                         </span>
-                                        @if (it.AudioIndex >= 0)
-                                        {
-                                            <audio id="audio-@it.RecordId" preload="none"
-                                                   src="@($"stream/{it.RecordId}/{it.AudioIndex}")"
-                                                   data-title="@it.Title" data-artist="@it.Author"></audio>
-                                        }
                                     </li>
                                 }
                             </ol>
                         }
 
-                        <div class="pl-add">
-                            <div class="field-label">Add from history</div>
-                            @{ var addable = Addable(pl); }
-                            @if (addable.Count == 0)
-                            {
-                                <div class="hint">All your playable history tracks are already here.</div>
-                            }
-                            else
-                            {
-                                @foreach (var rec in addable)
-                                {
-                                    <div class="pl-add-row">
-                                        <span class="pl-add-title">@rec.Title</span>
-                                        <button class="btn-mini" @onclick="() => Add(pl.Id, rec.Id)">+ Add</button>
-                                    </div>
-                                }
-                            }
+                        <div class="pl-detail-foot">
+                            <button class="btn-mini" @onclick="() => OpenRenameDialog(pl.Id)">✏️ Rename</button>
+                            <button class="btn-mini btn-danger-ghost" @onclick="() => AskDelete(pl.Id)">🗑️ Delete playlist</button>
                         </div>
                     </div>
                 }
@@ -111,10 +91,135 @@ else
     </div>
 }
 
+@if (_addDialogPlaylistId is not null)
+{
+    var dlgPl = _playlists.FirstOrDefault(p => p.Id == _addDialogPlaylistId);
+    var (matches, truncated) = SearchLibrary();
+    <div class="modal-scrim" @onclick="CloseAddDialog"></div>
+    <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-head">
+            <span>Add to “@dlgPl?.Name”</span>
+            <button class="btn-mini" @onclick="CloseAddDialog" aria-label="Close">✕</button>
+        </div>
+
+        <input class="text-input" placeholder="Search your library…" autofocus
+               @bind="_search" @bind:event="oninput" />
+
+        <div class="modal-list">
+            @if (matches.Count == 0)
+            {
+                <div class="hint">@(string.IsNullOrWhiteSpace(_search)
+                    ? "Nothing left to add — every library track is already in this playlist."
+                    : "No tracks match your search.")</div>
+            }
+            else
+            {
+                @foreach (var rec in matches)
+                {
+                    var picked = _selected.Contains(rec.Id);
+                    <label class="pick-row @(picked ? "picked" : "")">
+                        <input type="checkbox" checked="@picked" @onchange="() => TogglePick(rec.Id)" />
+                        <span class="pick-main">
+                            <span class="pick-title">@rec.Title</span>
+                            @if (!string.IsNullOrWhiteSpace(rec.Author) && rec.Source != TrackSource.Upload)
+                            {
+                                <span class="pick-auth">@rec.Author</span>
+                            }
+                        </span>
+                        <span class="src-badge src-@rec.Source.ToString().ToLowerInvariant()">@(rec.Source == TrackSource.Upload ? "Upload" : "YouTube")</span>
+                    </label>
+                }
+                @if (truncated)
+                {
+                    <div class="hint">Showing the first @MaxResults matches — type to narrow the list.</div>
+                }
+            }
+        </div>
+
+        <div class="modal-foot">
+            <span class="hint">@_selected.Count selected</span>
+            <div class="modal-foot-btns">
+                <button class="btn-mini" @onclick="CloseAddDialog">Cancel</button>
+                <button class="btn btn-primary" @onclick="AddSelected" disabled="@(_selected.Count == 0)">Add @_selected.Count</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_showCreate)
+{
+    <div class="modal-scrim" @onclick="CloseCreateDialog"></div>
+    <div class="modal modal-sm" role="dialog" aria-modal="true">
+        <div class="modal-head"><span>New playlist</span></div>
+        <input class="text-input" placeholder="e.g. Cultivation stories" autofocus
+               @bind="_newName" @bind:event="oninput" @onkeydown="CreateOnEnter" />
+        <div class="modal-foot">
+            <span></span>
+            <div class="modal-foot-btns">
+                <button class="btn-mini" @onclick="CloseCreateDialog">Cancel</button>
+                <button class="btn btn-create" @onclick="Create"
+                        disabled="@string.IsNullOrWhiteSpace(_newName)">Create</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_renameDialogPlaylistId is not null)
+{
+    <div class="modal-scrim" @onclick="CloseRenameDialog"></div>
+    <div class="modal modal-sm" role="dialog" aria-modal="true">
+        <div class="modal-head"><span>Rename playlist</span></div>
+        <input class="text-input" placeholder="Playlist name" autofocus
+               @bind="_renameName" @bind:event="oninput" @onkeydown="RenameOnEnter" />
+        <div class="modal-foot">
+            <span></span>
+            <div class="modal-foot-btns">
+                <button class="btn-mini" @onclick="CloseRenameDialog">Cancel</button>
+                <button class="btn btn-create" @onclick="ConfirmRename"
+                        disabled="@string.IsNullOrWhiteSpace(_renameName)">Save</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_deleteDialogPlaylistId is not null)
+{
+    var delPl = _playlists.FirstOrDefault(p => p.Id == _deleteDialogPlaylistId);
+    <div class="modal-scrim" @onclick="CancelDelete"></div>
+    <div class="modal modal-sm" role="dialog" aria-modal="true">
+        <div class="modal-head"><span>Delete playlist?</span></div>
+        <p class="confirm-text">
+            Delete “<b>@delPl?.Name</b>”? The playlist and its order are removed —
+            your library tracks and their files are kept.
+        </p>
+        <div class="modal-foot">
+            <span></span>
+            <div class="modal-foot-btns">
+                <button class="btn-mini" @onclick="CancelDelete">Cancel</button>
+                <button class="btn btn-danger" @onclick="ConfirmDelete">Delete</button>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     private IReadOnlyList<Playlist> _playlists = Array.Empty<Playlist>();
     private string _newName = "";
     private string? _selectedId;
+    private bool _showCreate;
+
+    // --- "Add tracks" picker dialog ---
+    private const int MaxResults = 50;
+    private string? _addDialogPlaylistId;
+    private string _search = "";
+    private readonly HashSet<string> _selected = new();
+
+    // --- rename dialog ---
+    private string? _renameDialogPlaylistId;
+    private string _renameName = "";
+
+    // --- delete confirmation dialog ---
+    private string? _deleteDialogPlaylistId;
 
     protected override void OnInitialized() => _playlists = Store.All();
 
@@ -133,12 +238,56 @@ else
         return list;
     }
 
-    private List<DownloadRecord> Addable(Playlist pl)
+    private void OpenAddDialog(string plId)
     {
-        var inList = pl.RecordIds.ToHashSet();
-        return History.All()
+        _addDialogPlaylistId = plId;
+        _search = "";
+        _selected.Clear();
+    }
+
+    private void CloseAddDialog() => _addDialogPlaylistId = null;
+
+    private void TogglePick(string recordId)
+    {
+        if (!_selected.Add(recordId)) _selected.Remove(recordId);
+    }
+
+    /// <summary>Library tracks (with audio) not already in the open playlist, filtered by
+    /// the search box and capped at <see cref="MaxResults"/> so a huge library stays cheap
+    /// to render. Returns whether the result was truncated.</summary>
+    private (List<DownloadRecord> Items, bool Truncated) SearchLibrary()
+    {
+        var pl = _addDialogPlaylistId is null ? null : Store.Get(_addDialogPlaylistId);
+        var inList = pl?.RecordIds.ToHashSet() ?? new HashSet<string>();
+        var q = _search.Trim();
+
+        var matched = History.Active()
             .Where(r => !inList.Contains(r.Id) && FirstAudioIndex(r) >= 0)
+            .Where(r => q.Length == 0
+                || r.Title.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || (r.Author?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
+            .Take(MaxResults + 1)
             .ToList();
+
+        var truncated = matched.Count > MaxResults;
+        if (truncated) matched = matched.Take(MaxResults).ToList();
+        return (matched, truncated);
+    }
+
+    private async Task AddSelected()
+    {
+        if (_addDialogPlaylistId is null || _selected.Count == 0) return;
+        await Store.AddItemsAsync(_addDialogPlaylistId, _selected.ToList());
+        _playlists = Store.All();
+        CloseAddDialog();
+    }
+
+    private void OpenCreateDialog() { _newName = ""; _showCreate = true; }
+    private void CloseCreateDialog() => _showCreate = false;
+
+    private async Task CreateOnEnter(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Create();
     }
 
     private async Task Create()
@@ -146,20 +295,52 @@ else
         if (string.IsNullOrWhiteSpace(_newName)) return;
         var pl = await Store.CreateAsync(_newName);
         _newName = "";
+        _showCreate = false;
         _playlists = Store.All();
         _selectedId = pl.Id;
     }
 
     private void Select(string id) => _selectedId = _selectedId == id ? null : id;
 
-    private async Task Delete(string id)
+    private void OpenRenameDialog(string id)
     {
+        _renameDialogPlaylistId = id;
+        _renameName = _playlists.FirstOrDefault(p => p.Id == id)?.Name ?? "";
+    }
+    private void CloseRenameDialog() => _renameDialogPlaylistId = null;
+
+    private async Task RenameOnEnter(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await ConfirmRename();
+    }
+
+    private async Task ConfirmRename()
+    {
+        if (_renameDialogPlaylistId is null || string.IsNullOrWhiteSpace(_renameName)) return;
+        var id = _renameDialogPlaylistId;
+        var name = _renameName.Trim();
+        await Store.RenameAsync(id, name);
+        // Keep any downloaded copy's label in sync (it's stored client-side in localStorage).
+        try { await JS.InvokeVoidAsync("ytdlOffline.renameSaved", id, name); }
+        catch { /* offline store not loaded — nothing downloaded to relabel */ }
+        _renameName = "";
+        _renameDialogPlaylistId = null;
+        _playlists = Store.All();
+    }
+
+    private void AskDelete(string id) => _deleteDialogPlaylistId = id;
+    private void CancelDelete() => _deleteDialogPlaylistId = null;
+
+    private async Task ConfirmDelete()
+    {
+        if (_deleteDialogPlaylistId is null) return;
+        var id = _deleteDialogPlaylistId;
+        _deleteDialogPlaylistId = null;
         await Store.DeleteAsync(id);
         if (_selectedId == id) _selectedId = null;
         _playlists = Store.All();
     }
 
-    private async Task Add(string plId, string recordId)    { await Store.AddItemAsync(plId, recordId);    _playlists = Store.All(); }
     private async Task Remove(string plId, string recordId) { await Store.RemoveItemAsync(plId, recordId); _playlists = Store.All(); }
     private async Task Move(string plId, string recordId, int delta) { await Store.MoveAsync(plId, recordId, delta); _playlists = Store.All(); }
 

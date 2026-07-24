@@ -2,16 +2,39 @@
 <html lang="en">
 <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <base href="/" />
     <link rel="stylesheet" href="app.css" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%AC%87%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="icon.svg" />
+    <meta name="theme-color" content="#0f1115" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>YouTube Downloader</title>
     <HeadOutlet />
 </head>
 <body>
     <Routes />
+
+    <div id="components-reconnect-modal" class="reconnect-modal">
+        <div class="reconnect-box"><span class="reconnect-spinner"></span> Reconnecting…</div>
+    </div>
+
     <script src="_framework/blazor.web.js"></script>
+    <script src="reconnect.js"></script>
+    <script src="offline-store.js"></script>
     <script src="player.js"></script>
+    <script src="playlist-offline.js"></script>
+    <script src="nav.js"></script>
+    <script>
+        // Register the offline service worker so the app is installable and the
+        // /offline.html player works with no network. It only intercepts the offline
+        // page, its assets and /stream/… audio — the live Blazor circuit is untouched.
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('/sw.js').catch(function () {});
+            });
+        }
+    </script>
 </body>
 </html>

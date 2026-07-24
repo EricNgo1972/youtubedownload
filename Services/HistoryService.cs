@@ -59,6 +59,15 @@ public class HistoryService
             return _records.FirstOrDefault(r => r.Id == id);
     }
 
+    /// <summary>The first record for a YouTube video id, or null. Used to skip
+    /// re-downloading playlist videos that are already in the library.</summary>
+    public DownloadRecord? FirstByVideoId(string videoId)
+    {
+        if (string.IsNullOrEmpty(videoId)) return null;
+        lock (_records)
+            return _records.FirstOrDefault(r => r.VideoId == videoId);
+    }
+
     public async Task AddAsync(DownloadRecord record)
     {
         await _gate.WaitAsync();
@@ -82,6 +91,19 @@ public class HistoryService
                 if (record is null) return;
                 record.Archived = archived;
             }
+            await SaveAsync();
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Removes a record (used when Restart replaces an item's download).
+    /// Files are left on disk; a re-download overwrites them.</summary>
+    public async Task RemoveAsync(string id)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            lock (_records) _records.RemoveAll(r => r.Id == id);
             await SaveAsync();
         }
         finally { _gate.Release(); }

@@ -1,4 +1,4 @@
-@page "/"
+@page "/download"
 @rendermode InteractiveServer
 @inject DownloadJobService Jobs
 @inject HistoryService History
@@ -6,16 +6,16 @@
 
 <PageTitle>Download</PageTitle>
 
-<h1>Download a video</h1>
+<h1>Download</h1>
 
 <div class="card">
-    <label class="field-label" for="url">YouTube video URL</label>
-    <input id="url" class="text-input" placeholder="https://www.youtube.com/watch?v=…"
-           @bind="_url" @bind:event="oninput" />
+    <label class="field-label" for="url">YouTube video or playlist URL</label>
+    <input id="url" class="text-input" placeholder="https://www.youtube.com/watch?v=… or /playlist?list=…"
+           value="@_url" @oninput="OnUrlInput" />
 
     @if (_alreadyDownloaded)
     {
-        <div class="hint hint-warn">✓ You've already downloaded this video (see History).</div>
+        <div class="hint hint-warn">✓ You've already downloaded this video (see Library).</div>
     }
 
     <div class="formats">
@@ -24,13 +24,19 @@
         <label class="chk"><input type="checkbox" @bind="_wantSubs" /> <span>Subtitles</span></label>
     </div>
 
-    @if (_hasPlaylist)
+    @if (_hasPlaylist && _hasVideo)
     {
         <div class="playlist-opt">
             <label class="chk">
                 <input type="checkbox" @bind="_wantPlaylist" />
                 <span>📃 This link has a playlist — download <strong>every</strong> video in it</span>
             </label>
+        </div>
+    }
+    else if (_hasPlaylist)
+    {
+        <div class="playlist-opt">
+            <span>📃 Playlist link — <strong>every</strong> video in it will be downloaded.</span>
         </div>
     }
 
@@ -60,21 +66,82 @@
                 <span class="job-stage">@job.Stage</span>
                 @if (job.IsActive)
                 {
-                    <button class="btn-mini" @onclick="() => Jobs.Cancel(job.Id)">Cancel</button>
+                    <button class="btn-mini" @onclick="() => CancelJob(job)">@(job.IsPlaylist ? "Cancel all" : "Cancel")</button>
                 }
             </div>
-            @if (job.Status == JobStatus.Running)
+
+            @if (job.Status == JobStatus.Running && job.IsPlaylist)
+            {
+                <div class="bar job-overall"><div class="fill" style="width:@job.Percent%"></div></div>
+            }
+
+            @if (job.Items.Count > 0)
+            {
+                <ol class="job-items">
+                    @foreach (var item in job.Items)
+                    {
+                        <li class="job-item">
+                            @if (item.Skipped)
+                            {
+                                <span class="badge badge-skipped">Skipped</span>
+                            }
+                            else
+                            {
+                                <span class="badge badge-@item.Status.ToString().ToLowerInvariant()">@ItemStatus(item)</span>
+                            }
+                            <div class="job-item-main">
+                                <div class="job-item-title">@(string.IsNullOrWhiteSpace(item.Title) ? "Loading title…" : item.Title)</div>
+                                @if (item.Skipped)
+                                {
+                                    <div class="job-item-stage">Already in your Library</div>
+                                }
+                                else if (item.Status == JobStatus.Running)
+                                {
+                                    <div class="job-item-stage">@item.Stage · @item.Percent%</div>
+                                    <div class="bar"><div class="fill" style="width:@item.Percent%"></div></div>
+                                }
+                                else if (item.Status == JobStatus.Paused)
+                                {
+                                    <div class="job-item-stage">Paused</div>
+                                }
+                                else if (item.Status == JobStatus.Failed && item.Error is not null)
+                                {
+                                    <div class="job-error">@item.Error</div>
+                                }
+                            </div>
+                            <span class="job-item-ctl">
+                                @if (item.Status is JobStatus.Running or JobStatus.Queued)
+                                {
+                                    <button class="btn-mini" title="Pause" @onclick="() => Pause(job, item)">⏸</button>
+                                    <button class="btn-mini" title="Cancel" @onclick="() => CancelItem(job, item)">✕</button>
+                                }
+                                else if (item.Status == JobStatus.Paused)
+                                {
+                                    <button class="btn-mini" title="Resume" @onclick="() => Resume(job, item)">▶</button>
+                                    <button class="btn-mini" title="Cancel" @onclick="() => CancelItem(job, item)">✕</button>
+                                }
+                                else
+                                {
+                                    <button class="btn-mini" title="Restart download" @onclick="() => Restart(job, item)">↻</button>
+                                }
+                            </span>
+                        </li>
+                    }
+                </ol>
+            }
+            else if (job.Status == JobStatus.Running)
             {
                 <div class="bar"><div class="fill" style="width:@job.Percent%"></div></div>
             }
+
             <div class="hint job-url">@job.Url</div>
             @if (job.Status == JobStatus.Failed && job.Error is not null)
             {
                 <div class="job-error">@job.Error</div>
             }
-            @if (job.Status == JobStatus.Completed)
+            @if (job.RecordIds.Count > 0)
             {
-                <a class="file-link" href="history">View in History →</a>
+                <a class="file-link" href="library">View in Library →</a>
             }
         </div>
     }
@@ -82,8 +149,8 @@
 
 @code {
     private string _url = "";
-    private bool _wantMp4 = true, _wantMp3 = false, _wantSubs = true;
-    private bool _wantPlaylist, _hasPlaylist, _alreadyDownloaded;
+    private bool _wantMp4 = false, _wantMp3 = true, _wantSubs = true;
+    private bool _wantPlaylist, _hasPlaylist, _hasVideo, _alreadyDownloaded;
 
     private List<DownloadJob> _jobs = new();
     private PeriodicTimer? _timer;
@@ -97,7 +164,11 @@
         _jobs = Jobs.All().ToList();
     }
 
-    protected override void OnParametersSet() => RefreshUrlState();
+    private void OnUrlInput(ChangeEventArgs e)
+    {
+        _url = e.Value?.ToString() ?? "";
+        RefreshUrlState();
+    }
 
     protected override void OnAfterRender(bool firstRender)
     {
@@ -107,9 +178,14 @@
     private void RefreshUrlState()
     {
         var id = YoutubeDownloadService.TryGetVideoId(_url);
+        _hasVideo = id is not null;
         _alreadyDownloaded = id is not null && History.Contains(id);
         _hasPlaylist = YoutubeDownloadService.HasPlaylist(_url);
+
+        // A playlist-only URL (no single video) can only be a whole-playlist
+        // download, so force it on. When there's also a video, leave it to the user.
         if (!_hasPlaylist) _wantPlaylist = false;
+        else if (!_hasVideo) _wantPlaylist = true;
     }
 
     private void Enqueue()
@@ -161,12 +237,38 @@
     private static string Badge(DownloadJob j) => j.Status switch
     {
         JobStatus.Queued => "Queued",
-        JobStatus.Running => $"{j.Percent}%",
+        JobStatus.Running => j.IsPlaylist ? $"{j.Percent}%" : $"{(j.Items.Count > 0 ? j.Items[0].Percent : j.Percent)}%",
         JobStatus.Completed => "Done",
         JobStatus.Failed => "Failed",
         JobStatus.Cancelled => "Cancelled",
+        JobStatus.Paused => "Paused",
         _ => "",
     };
+
+    private static string ItemStatus(DownloadItem it) => it.Status switch
+    {
+        JobStatus.Queued => "Queued",
+        JobStatus.Running => "Downloading",
+        JobStatus.Completed => "Completed",
+        JobStatus.Failed => "Failed",
+        JobStatus.Cancelled => "Cancelled",
+        JobStatus.Paused => "Paused",
+        _ => "",
+    };
+
+    private void CancelJob(DownloadJob job)   { Jobs.Cancel(job.Id);                  AfterControl(); }
+    private void Pause(DownloadJob job, DownloadItem item)   { Jobs.PauseItem(job.Id, item.Id);   AfterControl(); }
+    private void Resume(DownloadJob job, DownloadItem item)  { Jobs.ResumeItem(job.Id, item.Id);  AfterControl(); }
+    private void CancelItem(DownloadJob job, DownloadItem item) { Jobs.CancelItem(job.Id, item.Id); AfterControl(); }
+    private void Restart(DownloadJob job, DownloadItem item) { Jobs.RestartItem(job.Id, item.Id); AfterControl(); }
+
+    // Refresh the snapshot and make sure the poll loop is running (a restart/resume can
+    // revive a job that had already finished).
+    private void AfterControl()
+    {
+        _jobs = Jobs.All().ToList();
+        EnsurePolling();
+    }
 
     public async ValueTask DisposeAsync()
     {

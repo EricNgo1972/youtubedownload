@@ -12,6 +12,40 @@
 
 * { box-sizing: border-box; }
 
+/* Blazor reconnect overlay (shown only while the circuit is down). */
+.reconnect-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    align-items: center;
+    justify-content: center;
+    background: rgba(8, 10, 20, 0.62);
+}
+.reconnect-modal.components-reconnect-show,
+.reconnect-modal.components-reconnect-failed,
+.reconnect-modal.components-reconnect-rejected { display: flex; }
+
+.reconnect-box {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: #1a1e33;
+    border: 1px solid #2c3252;
+    border-radius: 12px;
+    padding: 16px 22px;
+    color: #e7e9f3;
+    font-weight: 600;
+}
+.reconnect-spinner {
+    width: 18px; height: 18px;
+    border: 3px solid #2c3252;
+    border-top-color: #ff3d54;
+    border-radius: 50%;
+    animation: ytdl-spin 1s linear infinite;
+}
+@keyframes ytdl-spin { to { transform: rotate(360deg); } }
+
 body {
     margin: 0;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -19,13 +53,20 @@ body {
     color: var(--text);
 }
 
-.page { max-width: 820px; margin: 0 auto; padding: 0 20px 60px; }
+.page {
+    max-width: 820px;
+    margin: 0 auto;
+    /* Pad the sides by the notch/rounded-corner insets too (landscape / installed PWA). */
+    padding: 0 max(20px, env(safe-area-inset-right)) 60px max(20px, env(safe-area-inset-left));
+}
 
 .topbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 20px 0;
+    /* Reserve the Dynamic Island / status-bar height when installed to the home screen,
+       so the brand + nav aren't hidden behind it. Falls back to 20px on non-notch devices. */
+    padding: calc(20px + env(safe-area-inset-top, 0px)) 0 20px;
     margin-bottom: 12px;
     border-bottom: 1px solid var(--border);
 }
@@ -43,6 +84,74 @@ body {
 }
 .navlink:hover { background: var(--panel-2); color: var(--text); }
 .navlink.active { background: var(--accent); color: #fff; }
+
+/* Kebab toggle — hidden on wide screens, shown when the nav collapses. */
+.nav-kebab {
+    display: none;
+    background: none;
+    border: 0;
+    color: var(--text);
+    font-size: 1.5rem;
+    line-height: 1;
+    padding: 6px 12px;
+    cursor: pointer;
+    border-radius: 8px;
+}
+.nav-kebab:hover { background: var(--panel-2); }
+.nav-scrim { display: none; }
+
+/* Phone: collapse the three links into a dropdown behind the hamburger. */
+@media (max-width: 640px) {
+    .topbar { position: relative; }
+    .nav-kebab { display: block; }
+
+    .topbar nav {
+        display: none;
+        position: absolute;
+        top: 100%;
+        right: 0;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        min-width: 190px;
+        padding: 8px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+        z-index: 60;
+    }
+    .topbar nav.open { display: flex; }
+    .topbar nav .navlink { padding: 12px 14px; }
+
+    /* Tap-outside-to-close backdrop. */
+    .nav-scrim {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+    }
+}
+
+/* Inline, dismissible "install as app" card (see pwa-install.js; Downloads page #pwa-slot). */
+.pwa-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 10px 0 4px;
+    padding: 12px 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    font-size: 0.9rem;
+    color: var(--muted);
+    line-height: 1.45;
+}
+.pwa-card b { color: var(--text); font-weight: 600; }
+.pwa-card .pwa-btns { margin-left: auto; flex: none; display: flex; gap: 8px; align-items: center; }
+.pwa-card button { border: 0; border-radius: 9px; cursor: pointer; font-weight: 700; }
+.pwa-card .pwa-go { background: var(--ok); color: #052018; padding: 8px 14px; }
+.pwa-card .pwa-x { background: transparent; color: var(--muted); font-size: 1rem; padding: 6px 8px; }
 
 h1 { font-size: 1.5rem; margin: 18px 0; }
 
@@ -83,6 +192,9 @@ h1 { font-size: 1.5rem; margin: 18px 0; }
 }
 .btn-primary { background: var(--accent); color: #fff; }
 .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+.btn-create { background: transparent; color: var(--ok); border: 1px solid var(--ok); }
+.btn-create:hover { background: rgba(52, 211, 153, 0.12); }
+.btn-create:disabled { opacity: .5; cursor: not-allowed; }
 .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
 .btn-ghost:hover { color: var(--text); }
 
@@ -125,8 +237,44 @@ h1 { font-size: 1.5rem; margin: 18px 0; }
 .job-head { display: flex; align-items: center; gap: 10px; }
 .job-stage { flex: 1; font-weight: 500; }
 .job .bar { margin-top: 12px; }
+.job-overall { margin-top: 12px; height: 6px; }
 .job-url { margin-top: 8px; word-break: break-all; }
 .job-error { margin-top: 8px; color: #fca5a5; font-size: .85rem; }
+
+/* Playlist item list: one row per video, each with its own status + progress. */
+.job-items {
+    list-style: none;
+    margin: 14px 0 4px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    counter-reset: ji;
+}
+.job-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-top: 1px solid var(--border);
+}
+.job-item::before {
+    counter-increment: ji;
+    content: counter(ji);
+    color: var(--muted);
+    font-size: .78rem;
+    min-width: 1.6em;
+    text-align: right;
+    flex: 0 0 auto;
+    padding-top: 3px;
+}
+.job-item .badge { flex: 0 0 auto; margin-top: 1px; }
+.job-item-main { flex: 1; min-width: 0; }
+.job-item-title { overflow-wrap: anywhere; line-height: 1.35; }
+.job-item-stage { color: var(--muted); font-size: .78rem; margin-top: 4px; }
+.job-item .bar { margin-top: 6px; height: 6px; }
+.job-item-ctl { display: flex; gap: 4px; flex: 0 0 auto; }
+.job-item-ctl .btn-mini { padding: 4px 9px; }
 
 .badge {
     padding: 3px 10px;
@@ -140,6 +288,8 @@ h1 { font-size: 1.5rem; margin: 18px 0; }
 .badge-completed { background: var(--ok); color: #063; }
 .badge-failed    { background: #7f1d2b; color: #fff; }
 .badge-cancelled { background: #4b5563; color: #e5e7eb; }
+.badge-skipped   { background: #3a2f52; color: #c4b5fd; }
+.badge-paused    { background: #4b3a12; color: #fcd34d; }
 
 /* History: responsive card list (mobile-friendly, no table overflow). */
 .hist-list { display: flex; flex-direction: column; gap: 12px; }
@@ -266,6 +416,20 @@ h1 { font-size: 1.5rem; margin: 18px 0; }
 }
 .btn-play:hover { filter: brightness(1.1); }
 
+.btn-shuffle {
+    display: inline-block;
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted);
+    font-weight: 600;
+    font-size: .9rem;
+    cursor: pointer;
+}
+.btn-shuffle:hover { color: var(--text); border-color: var(--accent-2); }
+.btn-shuffle.on { border-color: var(--accent); color: var(--accent); background: rgba(255, 61, 84, 0.12); }
+
 .btn-mini {
     padding: 5px 10px;
     border: 1px solid var(--border);
@@ -279,4 +443,161 @@ h1 { font-size: 1.5rem; margin: 18px 0; }
 }
 .btn-mini:hover { color: var(--text); border-color: var(--accent-2); }
 
+/* Compact "+" add button in the playlist header. */
+.pl-add-btn {
+    width: 32px;
+    padding: 0;
+    font-size: 1.35rem;
+    line-height: 1;
+    color: var(--text);
+    background: transparent;
+    border: none;
+}
+.pl-add-btn:hover { color: #fff; background: var(--panel-2); border: none; }
+
+/* "Add tracks" picker dialog. */
+.modal-scrim { position: fixed; inset: 0; z-index: 1700; background: rgba(8, 10, 20, 0.62); }
+.modal {
+    position: fixed;
+    z-index: 1701;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(560px, 94vw);
+    max-height: min(84vh, 720px);
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; font-weight: 700; font-size: 1.1rem; margin-bottom: 12px; }
+.modal .text-input { margin-bottom: 12px; }
+.modal-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 0 -6px; padding: 0 6px; }
+.pick-row { display: flex; align-items: center; gap: 12px; padding: 10px 8px; border-radius: 9px; cursor: pointer; }
+.pick-row:hover { background: var(--panel-2); }
+.pick-row.picked { background: rgba(79, 124, 255, 0.16); }
+.pick-row input[type=checkbox] { width: 18px; height: 18px; flex: none; accent-color: var(--accent-2); }
+.pick-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pick-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-auth { font-size: 0.78rem; color: var(--muted); }
+.modal-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
+.modal-foot-btns { display: flex; gap: 8px; }
+.modal-sm { max-height: none; }
+.confirm-text { margin: 0; color: var(--muted); line-height: 1.55; }
+
+/* Danger buttons: solid for a confirmed action, ghost for the trigger. */
+.btn-danger { background: var(--accent); color: #fff; }
+.btn-danger:hover { filter: brightness(1.08); }
+.btn-danger-ghost { color: var(--accent); border-color: var(--accent); background: transparent; }
+.btn-danger-ghost:hover { color: #fff; background: var(--accent); border-color: var(--accent); }
+
+.pl-detail-foot { margin-top: 18px; display: flex; justify-content: space-between; gap: 8px; }
+
+/* Remove-track "✕" button — red glyph, fills red on hover. */
+.btn-x { color: var(--accent); }
+.btn-x:hover { color: #fff; background: var(--accent); border-color: var(--accent); }
+
+/* Play-track "▶" button — green glyph, fills green on hover. */
+.btn-p { color: var(--ok); }
+.btn-p:hover { color: #fff; background: var(--ok); border-color: var(--ok); }
+
+/* Per-playlist download toggle in the header (driven by playlist-offline.js). */
+.dl-toggle { color: var(--muted); min-width: 34px; }
+.dl-toggle.saved { color: var(--ok); border-color: var(--ok); }
+.dl-toggle.stale { color: #e3b341; border-color: #e3b341; }
+.dl-toggle.busy { color: var(--accent-2); border-color: var(--accent-2); }
+
+/* A track row / play button marked as currently playing by the shared player. */
+.pl-item.playing .pl-item-title { color: var(--ok); font-weight: 600; }
+.btn-play.playing { background: var(--ok); }
+
+/* Shared "now playing" bar, injected on every page by player.js. */
+.np-bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 800;
+    display: none;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    padding: 10px max(16px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.32);
+}
+.np-bar.show { display: block; }
+.np-meta { max-width: 760px; margin: 0 auto 6px; }
+.np-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-artist { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-ctl { max-width: 760px; margin: 0 auto; display: flex; align-items: center; justify-content: center; gap: 22px; }
+.np-ctl button { background: none; border: 0; color: var(--text); font-size: 25px; cursor: pointer; line-height: 1; }
+.np-play { width: 54px; height: 54px; border-radius: 50%; background: var(--ok) !important; color: #052018 !important;
+           display: flex; align-items: center; justify-content: center; }
+.np-toggle { font-size: 19px; opacity: .45; }
+.np-toggle.on { opacity: 1; color: var(--ok); }
+body.has-np .page { padding-bottom: 140px; }
+
+/* Downloads page: when offline, the live Blazor-page links can't load — show them disabled. */
+body.offline-mode .needs-online { opacity: .4; pointer-events: none; }
+
 .header-actions { display: flex; gap: 8px; }
+
+/* Library: "add a track" sources (upload / from YouTube) */
+.add-track-sources {
+    display: flex;
+    gap: 12px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+}
+.add-source {
+    flex: 1;
+    min-width: 200px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 14px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
+    text-decoration: none;
+    color: var(--text);
+}
+.add-source:hover { border-color: var(--accent-2); }
+.add-source-title { font-weight: 600; }
+.add-source .file-input { margin-top: 6px; font-size: .82rem; color: var(--muted); }
+.add-source .file-input::file-selector-button {
+    margin-right: 10px;
+    padding: 6px 12px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent-2);
+    color: #fff;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+/* Source badge (YouTube vs Upload) */
+.src-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: .68rem;
+    font-weight: 700;
+    letter-spacing: .02em;
+    text-transform: uppercase;
+    flex: 0 0 auto;
+}
+.src-youtube { background: rgba(255, 61, 84, .16); color: #ff8a99; }
+.src-upload  { background: rgba(79, 124, 255, .18); color: #a9bcff; }
+
+.hist-title-wrap { flex: 1; min-width: 0; }
+
+.file-link-plain { color: var(--accent-2); text-decoration: none; font-weight: 600; }
+.file-link-plain:hover { text-decoration: underline; }
+
+.upload-progress { margin-top: 14px; }
+.upload-progress-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+}

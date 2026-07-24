@@ -1,24 +1,62 @@
+@page "/library"
 @page "/history"
 @rendermode InteractiveServer
 @inject HistoryService Store
+@inject UploadService Uploads
 
-<PageTitle>History</PageTitle>
+<PageTitle>Library</PageTitle>
 
 <div class="row-between">
-    <h1>@(_showArchived ? "Archived" : "Download history")</h1>
+    <h1>@(_showArchived ? "Archived" : "Library")</h1>
     <div class="header-actions">
         @if (_showArchived || _archivedCount > 0)
         {
             <button class="btn btn-ghost" @onclick="ToggleView">
-                @(_showArchived ? "Back to history" : $"Show archived ({_archivedCount})")
+                @(_showArchived ? "Back to library" : $"Show archived ({_archivedCount})")
             </button>
         }
     </div>
 </div>
 
+@if (!_showArchived)
+{
+    <div class="card add-track">
+        <div class="field-label">Add a track to your library</div>
+        <div class="add-track-sources">
+            <label class="add-source">
+                <span class="add-source-title">⬆️ Upload audio</span>
+                <span class="hint">@UploadService.AllowedExtsLabel — from this device</span>
+                <InputFile OnChange="OnUpload" multiple accept="audio/*" class="file-input" />
+            </label>
+            <a class="add-source add-source-link" href="download">
+                <span class="add-source-title">▶️ From YouTube</span>
+                <span class="hint">paste a video URL to download its audio</span>
+            </a>
+        </div>
+        @if (_uploading)
+        {
+            <div class="upload-progress">
+                <div class="upload-progress-head">
+                    <span class="hint">Uploading @_uploadStage</span>
+                    <span class="hint">@_uploadPct%@(_uploadTotal > 0 ? $" · {Mb(_uploadSent)} / {Mb(_uploadTotal)} MB" : "")</span>
+                </div>
+                <div class="bar"><div class="fill" style="width:@_uploadPct%"></div></div>
+            </div>
+        }
+        @if (_uploadMsg is not null)
+        {
+            <div class="hint" style="margin-top:12px; color: var(--ok)">✓ @_uploadMsg</div>
+        }
+        @if (_uploadError is not null)
+        {
+            <div class="job-error" style="margin-top:12px">@_uploadError</div>
+        }
+    </div>
+}
+
 @if (_records.Count == 0)
 {
-    <div class="card hint">@(_showArchived ? "Nothing archived." : "Nothing downloaded yet.")</div>
+    <div class="card hint">@(_showArchived ? "Nothing archived." : "Your library is empty. Upload a track or download one from YouTube above.")</div>
 }
 else
 {
@@ -28,7 +66,16 @@ else
             var audioIndex = FirstAudioIndex(r);
             <div class="hist-card">
                 <div class="hist-top">
-                    <a class="hist-title" href="@r.Url" target="_blank" rel="noopener">@r.Title</a>
+                    <span class="hist-title-wrap">
+                        @if (!string.IsNullOrWhiteSpace(r.Url))
+                        {
+                            <a class="hist-title" href="@r.Url" target="_blank" rel="noopener">@r.Title</a>
+                        }
+                        else
+                        {
+                            <span class="hist-title">@r.Title</span>
+                        }
+                    </span>
                     @if (_showArchived)
                     {
                         <button class="btn-mini" @onclick="() => SetArchived(r.Id, false)">Restore</button>
@@ -40,7 +87,8 @@ else
                 </div>
 
                 <div class="hist-meta">
-                    <span>@r.Author</span>
+                    <span class="src-badge src-@r.Source.ToString().ToLowerInvariant()">@SourceLabel(r.Source)</span>
+                    @if (!string.IsNullOrWhiteSpace(r.Author) && r.Source != TrackSource.Upload) { <span>@r.Author</span> }
                     @if (!string.IsNullOrWhiteSpace(r.Duration)) { <span>· @r.Duration</span> }
                     <span>· @r.DownloadedAt.LocalDateTime.ToString("g")</span>
                 </div>
@@ -48,11 +96,9 @@ else
                 <div class="hist-actions">
                     @if (audioIndex >= 0)
                     {
-                        <button class="btn-play" data-audio="audio-@r.Id"
-                                onclick="ytdlPlayer.toggle('audio-@r.Id')">▶ Play</button>
-                        <audio id="audio-@r.Id" preload="none"
-                               src="@($"stream/{r.Id}/{audioIndex}")"
-                               data-title="@r.Title" data-artist="@r.Author"></audio>
+                        <button class="btn-play play-label" data-track-url="@($"/stream/{r.Id}/{audioIndex}")"
+                                data-title="@r.Title" data-artist="@r.Author"
+                                onclick="ytdlPlayer.playEl(this)">▶ Play</button>
                     }
                     <div class="hist-files">
                         @for (var i = 0; i < r.Files.Count; i++)
@@ -70,6 +116,19 @@ else
     private IReadOnlyList<DownloadRecord> _records = Array.Empty<DownloadRecord>();
     private bool _showArchived;
     private int _archivedCount;
+
+    private bool _uploading;
+    private string _uploadStage = "";
+    private int _uploadPct;
+    private long _uploadSent;
+    private long _uploadTotal;
+    private string? _uploadMsg;
+    private string? _uploadError;
+
+    private static string Mb(long bytes) => (bytes / 1024d / 1024d).ToString("0.0");
+
+    // 500 MB per file — generous for long audio, well under a runaway.
+    private const long MaxUploadBytes = 500L * 1024 * 1024;
 
     protected override void OnInitialized() => Reload();
 
@@ -91,7 +150,63 @@ else
         Reload();
     }
 
-    private static readonly string[] AudioExts = { ".mp3", ".m4a" };
+    private async Task OnUpload(InputFileChangeEventArgs e)
+    {
+        _uploadError = null;
+        _uploadMsg = null;
+        _uploading = true;
+
+        var files = e.GetMultipleFiles(maximumFileCount: 50);
+        var added = 0;
+        var errors = new List<string>();
+
+        for (var i = 0; i < files.Count; i++)
+        {
+            var file = files[i];
+            _uploadStage = files.Count > 1 ? $"{file.Name} ({i + 1}/{files.Count})" : file.Name;
+            _uploadTotal = file.Size;
+            _uploadSent = 0;
+            _uploadPct = 0;
+            await InvokeAsync(StateHasChanged);
+
+            if (!UploadService.IsAllowed(file.Name))
+            {
+                errors.Add($"{file.Name}: unsupported type");
+                continue;
+            }
+            try
+            {
+                // Progress<T> marshals its callback back to this component's sync
+                // context, so re-rendering from it is safe. Only re-render when the
+                // whole-number percent changes, to avoid flooding the circuit.
+                var progress = new Progress<long>(sent =>
+                {
+                    _uploadSent = sent;
+                    var pct = _uploadTotal > 0 ? (int)(sent * 100 / _uploadTotal) : 0;
+                    if (pct != _uploadPct)
+                    {
+                        _uploadPct = pct;
+                        StateHasChanged();
+                    }
+                });
+
+                await using var stream = file.OpenReadStream(MaxUploadBytes);
+                await Uploads.AddAsync(file.Name, stream, progress);
+                added++;
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"{file.Name}: {ex.Message}");
+            }
+        }
+
+        _uploading = false;
+        if (added > 0) _uploadMsg = $"Added {added} track{(added == 1 ? "" : "s")} to your library.";
+        if (errors.Count > 0) _uploadError = string.Join(" · ", errors);
+        Reload();
+    }
+
+    private static readonly string[] AudioExts = { ".mp3", ".m4a", ".webm", ".wav", ".ogg", ".oga", ".aac", ".flac" };
 
     /// <summary>Index of the first playable audio file in a record, or -1.</summary>
     private static int FirstAudioIndex(DownloadRecord r)
@@ -101,6 +216,12 @@ else
                 return i;
         return -1;
     }
+
+    private static string SourceLabel(TrackSource s) => s switch
+    {
+        TrackSource.Upload => "Upload",
+        _ => "YouTube",
+    };
 
     /// <summary>Short button label for a file, e.g. "MP4", "MP3", "SRT EN".</summary>
     private static string FileLabel(string path)

@@ -68,6 +68,15 @@ public class PlaylistService
         if (p is not null && !p.RecordIds.Contains(recordId)) p.RecordIds.Add(recordId);
     });
 
+    /// <summary>Appends several tracks at once (skipping any already present), saving once.</summary>
+    public Task AddItemsAsync(string id, IEnumerable<string> recordIds) => Mutate(() =>
+    {
+        var p = Find(id);
+        if (p is null) return;
+        foreach (var rid in recordIds)
+            if (!p.RecordIds.Contains(rid)) p.RecordIds.Add(rid);
+    });
+
     public Task RemoveItemAsync(string id, string recordId) => Mutate(() =>
     {
         Find(id)?.RecordIds.Remove(recordId);

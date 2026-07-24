@@ -34,12 +34,11 @@ public class YoutubeDownloadService
     public static bool HasPlaylist(string? url) => PlaylistId.TryParse(url) is not null;
 
     /// <summary>
-    /// Downloads either a single video or, when <see cref="DownloadOptions.Playlist"/>
-    /// is set and the URL has a playlist, every video in that playlist. Each video
-    /// becomes its own history record. Returns all records produced.
+    /// Resolves a URL into the concrete list of videos to download — one entry for a
+    /// single video, every entry for a playlist — WITHOUT downloading anything. Lets
+    /// the caller show the full item list up front, then download them one by one.
     /// </summary>
-    public async Task<IReadOnlyList<DownloadRecord>> DownloadAsync(
-        string url, DownloadOptions opts, IProgress<DownloadProgress> progress, CancellationToken ct)
+    public async Task<DownloadPlan> ResolveAsync(string url, DownloadOptions opts, CancellationToken ct)
     {
         if (!opts.Mp4 && !opts.Mp3 && !opts.Subtitles)
             throw new InvalidOperationException("Pick at least one of MP4, MP3 or subtitles.");
@@ -48,55 +47,31 @@ public class YoutubeDownloadService
         {
             if (PlaylistId.TryParse(url) is not { } playlistId)
                 throw new InvalidOperationException("That URL doesn't contain a playlist.");
-            return await DownloadPlaylistAsync(playlistId, opts, progress, ct);
+
+            var playlist = await RetryAsync(async () => await _youtube.Playlists.GetAsync(playlistId), ct);
+            var videos = await RetryAsync(
+                async () => await _youtube.Playlists.GetVideosAsync(playlistId).CollectAsync(), ct);
+
+            // Each playlist gets its own sub-folder.
+            var playlistDir = Path.Combine(AppPaths.DownloadsDir(_config), Sanitize(playlist.Title));
+            var items = videos.Select(v => new PlannedVideo(v.Id.Value, v.Title)).ToList();
+            return new DownloadPlan(playlist.Title, playlistDir, items);
         }
 
         if (VideoId.TryParse(url) is not { } videoId)
             throw new InvalidOperationException("That doesn't look like a YouTube video URL.");
 
-        var record = await DownloadOneAsync(videoId, opts, AppPaths.DownloadsDir(_config), "", progress, ct);
-        return new[] { record };
+        // Single video: title fills in once the download resolves its metadata.
+        return new DownloadPlan("", AppPaths.DownloadsDir(_config),
+            new List<PlannedVideo> { new(videoId.Value, "") });
     }
 
-    private async Task<IReadOnlyList<DownloadRecord>> DownloadPlaylistAsync(
-        PlaylistId playlistId, DownloadOptions opts, IProgress<DownloadProgress> progress, CancellationToken ct)
-    {
-        progress.Report(new("Fetching playlist", 0));
-        var playlist = await WithRetryAsync(
-            async () => await _youtube.Playlists.GetAsync(playlistId), "Fetching playlist", progress, ct);
-        var videos = await WithRetryAsync(
-            async () => await _youtube.Playlists.GetVideosAsync(playlistId).CollectAsync(),
-            "Fetching playlist", progress, ct);
-
-        // Each playlist gets its own sub-folder.
-        var playlistDir = Path.Combine(AppPaths.DownloadsDir(_config), Sanitize(playlist.Title));
-        Directory.CreateDirectory(playlistDir);
-
-        var records = new List<DownloadRecord>();
-        for (var i = 0; i < videos.Count; i++)
-        {
-            ct.ThrowIfCancellationRequested();
-            var video = videos[i];
-            var label = $"[{i + 1}/{videos.Count}] ";
-            try
-            {
-                records.Add(await DownloadOneAsync(video.Id, opts, playlistDir, label, progress, ct));
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                // Skip a bad video but keep going through the rest of the playlist.
-                progress.Report(new($"{label}{video.Title}", 0, $"Skipped: {ex.Message}"));
-            }
-        }
-
-        progress.Report(new("Done", 1,
-            $"Playlist “{playlist.Title}”: {records.Count}/{videos.Count} downloaded."));
-        return records;
-    }
+    /// <summary>Downloads one already-resolved video into <paramref name="outputDir"/>,
+    /// reporting stage/percent for that single item. Adds a history record and returns it.</summary>
+    public Task<DownloadRecord> DownloadSingleAsync(
+        string videoId, DownloadOptions opts, string outputDir,
+        IProgress<DownloadProgress> progress, CancellationToken ct) =>
+        DownloadOneAsync(videoId, opts, outputDir, "", progress, ct);
 
     /// <summary>Downloads one video into <paramref name="outputDir"/>; <paramref name="label"/>
     /// prefixes progress stages (e.g. "[3/12] ") when part of a playlist.</summary>
@@ -135,25 +110,73 @@ public class YoutubeDownloadService
             $"{label}Looking up streams", progress, ct);
         var ffmpeg = ResolveFFmpegPath();
 
-        if (opts.Mp4)
-            record.Files.Add(await DownloadVideoAsync(manifest, ffmpeg, baseName + ".mp4", progress, ct));
+        var mp4Path = baseName + ".mp4";
+        var mp3Path = baseName + ".mp3";
 
-        if (opts.Mp3)
-            record.Files.Add(await DownloadAudioAsync(manifest, ffmpeg, baseName + ".mp3", progress, ct));
+        try
+        {
+            if (opts.Mp4)
+                record.Files.Add(await DownloadVideoAsync(manifest, ffmpeg, mp4Path, label, progress, ct));
 
-        if (opts.Subtitles)
-            record.Files.AddRange(await DownloadSubtitlesAsync(videoId, baseName, progress, ct));
+            if (opts.Mp3)
+                record.Files.Add(await DownloadAudioAsync(manifest, ffmpeg, mp3Path, label, progress, ct));
+
+            // Subtitles are secondary: a failure here must not discard a good audio/video
+            // download, so it's caught and reported rather than failing the whole item.
+            if (opts.Subtitles)
+            {
+                try
+                {
+                    record.Files.AddRange(await DownloadSubtitlesAsync(videoId, baseName, label, progress, ct));
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    progress.Report(new($"{label}Subtitles", 1, $"Skipped subtitles: {ex.Message}"));
+                }
+            }
+        }
+        catch
+        {
+            // Failed or cancelled mid-download: remove the half-written outputs (and any
+            // ffmpeg .stream-*.tmp scratch files) so no partial file or temp is left behind.
+            CleanupPartial(mp4Path);
+            CleanupPartial(mp3Path);
+            throw;
+        }
 
         await _history.AddAsync(record);
         progress.Report(new($"{label}Saved “{video.Title}”", 1));
         return record;
     }
 
+    /// <summary>Deletes a partial output file and any ffmpeg "<file>.stream-*.tmp"
+    /// scratch files left beside it. Best-effort; never throws.</summary>
+    private static void CleanupPartial(string finalPath)
+    {
+        TryDelete(finalPath);
+        var dir = Path.GetDirectoryName(finalPath);
+        if (dir is null || !Directory.Exists(dir)) return;
+        try
+        {
+            foreach (var tmp in Directory.EnumerateFiles(dir, Path.GetFileName(finalPath) + ".stream-*"))
+                TryDelete(tmp);
+        }
+        catch { /* best effort */ }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch { /* best effort */ }
+    }
+
     private async Task<string> DownloadVideoAsync(
-        StreamManifest manifest, string? ffmpeg, string filePath,
+        StreamManifest manifest, string? ffmpeg, string filePath, string label,
         IProgress<DownloadProgress> progress, CancellationToken ct)
     {
-        var sub = new Progress<double>(v => progress.Report(new("Video (MP4)", v)));
+        var stage = $"{label}Video (MP4)";
+        var sub = new Progress<double>(v => progress.Report(new(stage, v)));
 
         if (ffmpeg is not null)
         {
@@ -164,7 +187,7 @@ public class YoutubeDownloadService
                 ?? videoOnly.GetWithHighestVideoQuality();
             var audioStream = manifest.GetAudioOnlyStreams().GetWithHighestBitrate();
 
-            progress.Report(new("Video (MP4)", 0,
+            progress.Report(new(stage, 0,
                 $"{videoStream.VideoQuality.Label} + {audioStream.Bitrate.KiloBitsPerSecond:F0} kbps, merging with ffmpeg"));
 
             var conversion = new ConversionRequestBuilder(filePath)
@@ -172,56 +195,74 @@ public class YoutubeDownloadService
                 .SetContainer(Container.Mp4)
                 .Build();
 
-            await _youtube.Videos.DownloadAsync(
-                new IStreamInfo[] { videoStream, audioStream }, conversion, sub, ct);
+            await WithRetryAsync(async () =>
+            {
+                CleanupPartial(filePath);   // start each attempt from a clean slate
+                await _youtube.Videos.DownloadAsync(
+                    new IStreamInfo[] { videoStream, audioStream }, conversion, sub, ct);
+            }, stage, progress, ct);
         }
         else
         {
             // No ffmpeg: fall back to a combined stream (max ~720p).
             var muxed = manifest.GetMuxedStreams().GetWithHighestVideoQuality();
-            progress.Report(new("Video (MP4)", 0, $"{muxed.VideoQuality.Label} (combined, no ffmpeg)"));
-            await _youtube.Videos.Streams.DownloadAsync(muxed, filePath, sub, ct);
+            progress.Report(new(stage, 0, $"{muxed.VideoQuality.Label} (combined, no ffmpeg)"));
+            await WithRetryAsync(async () =>
+            {
+                CleanupPartial(filePath);
+                await _youtube.Videos.Streams.DownloadAsync(muxed, filePath, sub, ct);
+            }, stage, progress, ct);
         }
 
         return filePath;
     }
 
     private async Task<string> DownloadAudioAsync(
-        StreamManifest manifest, string? ffmpeg, string mp3Path,
+        StreamManifest manifest, string? ffmpeg, string mp3Path, string label,
         IProgress<DownloadProgress> progress, CancellationToken ct)
     {
         var audio = manifest.GetAudioOnlyStreams().GetWithHighestBitrate();
-        var sub = new Progress<double>(v => progress.Report(new("Audio (MP3)", v)));
+        var stage = $"{label}Audio (MP3)";
+        var sub = new Progress<double>(v => progress.Report(new(stage, v)));
 
         if (ffmpeg is not null)
         {
-            progress.Report(new("Audio (MP3)", 0,
+            progress.Report(new(stage, 0,
                 $"{audio.Bitrate.KiloBitsPerSecond:F0} kbps, transcoding to MP3"));
             var conversion = new ConversionRequestBuilder(mp3Path)
                 .SetFFmpegPath(ffmpeg)
                 .SetContainer(Container.Mp3)
                 .Build();
-            await _youtube.Videos.DownloadAsync(new IStreamInfo[] { audio }, conversion, sub, ct);
+            await WithRetryAsync(async () =>
+            {
+                CleanupPartial(mp3Path);
+                await _youtube.Videos.DownloadAsync(new IStreamInfo[] { audio }, conversion, sub, ct);
+            }, stage, progress, ct);
             return mp3Path;
         }
 
         // No ffmpeg: save the raw audio stream in its native container instead.
         var rawPath = Path.ChangeExtension(mp3Path, "." + audio.Container.Name);
-        progress.Report(new("Audio", 0, $"ffmpeg not found - saving raw .{audio.Container.Name}"));
-        await _youtube.Videos.Streams.DownloadAsync(audio, rawPath, sub, ct);
+        progress.Report(new(stage, 0, $"ffmpeg not found - saving raw .{audio.Container.Name}"));
+        await WithRetryAsync(async () =>
+        {
+            TryDelete(rawPath);
+            await _youtube.Videos.Streams.DownloadAsync(audio, rawPath, sub, ct);
+        }, stage, progress, ct);
         return rawPath;
     }
 
     private async Task<List<string>> DownloadSubtitlesAsync(
-        VideoId videoId, string baseName, IProgress<DownloadProgress> progress, CancellationToken ct)
+        VideoId videoId, string baseName, string label, IProgress<DownloadProgress> progress, CancellationToken ct)
     {
         var files = new List<string>();
-        progress.Report(new("Subtitles", 0, "Checking for subtitle tracks…"));
+        var stage = $"{label}Subtitles";
+        progress.Report(new(stage, 0, "Checking for subtitle tracks…"));
         var captions = await _youtube.Videos.ClosedCaptions.GetManifestAsync(videoId, ct);
 
         if (captions.Tracks.Count == 0)
         {
-            progress.Report(new("Subtitles", 1, "None available for this video."));
+            progress.Report(new(stage, 1, "None available for this video."));
             return files;
         }
 
@@ -232,11 +273,33 @@ public class YoutubeDownloadService
             var srtPath = $"{baseName}.{track.Language.Code}.srt";
             await _youtube.Videos.ClosedCaptions.DownloadAsync(track, srtPath, cancellationToken: ct);
             files.Add(srtPath);
-            progress.Report(new("Subtitles", (i + 1d) / total, $"Saved {track.Language.Name}"));
+            progress.Report(new(stage, (i + 1d) / total, $"Saved {track.Language.Name}"));
         }
 
         return files;
     }
+
+    /// <summary>Exponential-backoff retry (1s, 2s, 4s) with no progress channel —
+    /// used while resolving playlist metadata. Cancellation is never retried.</summary>
+    private static async Task<T> RetryAsync<T>(Func<Task<T>> action, CancellationToken ct, int maxAttempts = 4)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            try { return await action(); }
+            catch (OperationCanceledException) { throw; }
+            catch when (attempt < maxAttempts)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt - 1)), ct);
+            }
+        }
+    }
+
+    /// <summary>Void-returning overload of <see cref="WithRetryAsync{T}"/>.</summary>
+    private static Task WithRetryAsync(
+        Func<Task> action, string label, IProgress<DownloadProgress> progress,
+        CancellationToken ct, int maxAttempts = 4) =>
+        WithRetryAsync(async () => { await action(); return true; }, label, progress, ct, maxAttempts);
 
     /// <summary>Runs an operation with exponential backoff (1s, 2s, 4s), retrying
     /// transient failures. Cancellation is never retried.</summary>
