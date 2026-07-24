@@ -1,0 +1,180 @@
+@page "/"
+@rendermode InteractiveServer
+@inject DownloadJobService Jobs
+@inject HistoryService History
+@implements IAsyncDisposable
+
+<PageTitle>Download</PageTitle>
+
+<h1>Download a video</h1>
+
+<div class="card">
+    <label class="field-label" for="url">YouTube video URL</label>
+    <input id="url" class="text-input" placeholder="https://www.youtube.com/watch?v=…"
+           @bind="_url" @bind:event="oninput" />
+
+    @if (_alreadyDownloaded)
+    {
+        <div class="hint hint-warn">✓ You've already downloaded this video (see History).</div>
+    }
+
+    <div class="formats">
+        <label class="chk"><input type="checkbox" @bind="_wantMp4" /> <span>Video (MP4)</span></label>
+        <label class="chk"><input type="checkbox" @bind="_wantMp3" /> <span>Audio (MP3)</span></label>
+        <label class="chk"><input type="checkbox" @bind="_wantSubs" /> <span>Subtitles</span></label>
+    </div>
+
+    @if (_hasPlaylist)
+    {
+        <div class="playlist-opt">
+            <label class="chk">
+                <input type="checkbox" @bind="_wantPlaylist" />
+                <span>📃 This link has a playlist — download <strong>every</strong> video in it</span>
+            </label>
+        </div>
+    }
+
+    <div class="actions">
+        <button class="btn btn-primary" @onclick="Enqueue" disabled="@(!CanStart)">Start download</button>
+    </div>
+    <div class="hint" style="margin-top:10px">
+        Downloads run on the server — you can close this tab or lock your phone and they keep going.
+    </div>
+</div>
+
+@if (_jobs.Count > 0)
+{
+    <div class="row-between">
+        <h2 class="subhead">Downloads</h2>
+        @if (_jobs.Any(j => !j.IsActive))
+        {
+            <button class="btn btn-ghost" @onclick="ClearFinished">Clear finished</button>
+        }
+    </div>
+
+    @foreach (var job in _jobs)
+    {
+        <div class="card job">
+            <div class="job-head">
+                <span class="badge badge-@job.Status.ToString().ToLowerInvariant()">@Badge(job)</span>
+                <span class="job-stage">@job.Stage</span>
+                @if (job.IsActive)
+                {
+                    <button class="btn-mini" @onclick="() => Jobs.Cancel(job.Id)">Cancel</button>
+                }
+            </div>
+            @if (job.Status == JobStatus.Running)
+            {
+                <div class="bar"><div class="fill" style="width:@job.Percent%"></div></div>
+            }
+            <div class="hint job-url">@job.Url</div>
+            @if (job.Status == JobStatus.Failed && job.Error is not null)
+            {
+                <div class="job-error">@job.Error</div>
+            }
+            @if (job.Status == JobStatus.Completed)
+            {
+                <a class="file-link" href="history">View in History →</a>
+            }
+        </div>
+    }
+}
+
+@code {
+    private string _url = "";
+    private bool _wantMp4 = true, _wantMp3 = false, _wantSubs = true;
+    private bool _wantPlaylist, _hasPlaylist, _alreadyDownloaded;
+
+    private List<DownloadJob> _jobs = new();
+    private PeriodicTimer? _timer;
+    private Task? _pollTask;
+
+    private bool CanStart => !string.IsNullOrWhiteSpace(_url) && (_wantMp4 || _wantMp3 || _wantSubs);
+
+    protected override void OnInitialized()
+    {
+        RefreshUrlState();
+        _jobs = Jobs.All().ToList();
+    }
+
+    protected override void OnParametersSet() => RefreshUrlState();
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender) EnsurePolling();
+    }
+
+    private void RefreshUrlState()
+    {
+        var id = YoutubeDownloadService.TryGetVideoId(_url);
+        _alreadyDownloaded = id is not null && History.Contains(id);
+        _hasPlaylist = YoutubeDownloadService.HasPlaylist(_url);
+        if (!_hasPlaylist) _wantPlaylist = false;
+    }
+
+    private void Enqueue()
+    {
+        if (!CanStart) return;
+        Jobs.Enqueue(_url.Trim(), new DownloadOptions(_wantMp4, _wantMp3, _wantSubs, _wantPlaylist));
+        _url = "";
+        RefreshUrlState();
+        _jobs = Jobs.All().ToList();
+        EnsurePolling();
+    }
+
+    private void ClearFinished()
+    {
+        Jobs.ClearFinished();
+        _jobs = Jobs.All().ToList();
+    }
+
+    // Poll the server for job status once a second while anything is active; stop
+    // when idle, restart when a new job is queued. Survives tab reloads because
+    // job state lives in the hosted service, not this component.
+    private void EnsurePolling()
+    {
+        if (_pollTask is not null) return;
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        _pollTask = PollLoop();
+    }
+
+    private async Task PollLoop()
+    {
+        try
+        {
+            while (_timer is not null && await _timer.WaitForNextTickAsync())
+            {
+                _jobs = Jobs.All().ToList();
+                await InvokeAsync(StateHasChanged);
+                if (!_jobs.Any(j => j.IsActive)) break;
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _timer?.Dispose();
+            _timer = null;
+            _pollTask = null;
+        }
+    }
+
+    private static string Badge(DownloadJob j) => j.Status switch
+    {
+        JobStatus.Queued => "Queued",
+        JobStatus.Running => $"{j.Percent}%",
+        JobStatus.Completed => "Done",
+        JobStatus.Failed => "Failed",
+        JobStatus.Cancelled => "Cancelled",
+        _ => "",
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        _timer?.Dispose();
+        _timer = null;
+        if (_pollTask is not null)
+        {
+            try { await _pollTask; } catch { /* ignore */ }
+        }
+    }
+}

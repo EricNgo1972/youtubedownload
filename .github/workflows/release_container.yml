@@ -1,0 +1,90 @@
+name: Release Container
+
+# Manual only, like every other release workflow in the Maple family — there is no push or tag
+# trigger anywhere in the fleet. Build-and-push only: deployment is out-of-band, done by
+# mk-provisioning from the catalog row this workflow prints in its summary.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version / image tag (e.g. 1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write        # push to GitHub Container Registry
+
+env:
+  IMAGE: ghcr.io/ericngo1972/youtubedownloader   # GHCR image names must be lowercase
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Multi-stage build: the SDK stage compiles inside Docker, so no sibling repo checkout and no
+      # PAT are needed. This app has no project references outside its own tree.
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          tags: youtubedownloader:ci
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Prove the image actually serves before it is published — a container that boots but 404s on
+      # /health is worse than a failed build, because the fleet would happily pull it.
+      - name: Verify the image serves
+        run: |
+          docker run -d --name verify -p 18080:8080 youtubedownloader:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:18080/health > /dev/null 2>&1; then
+              echo "  ok: /health responded"
+              curl -fsS http://localhost:18080/api/health
+              docker rm -f verify > /dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error ::Container did not answer /health within 30s"
+          docker logs verify
+          docker rm -f verify > /dev/null
+          exit 1
+
+      - name: Push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ inputs.version }}
+            ${{ env.IMAGE }}:latest
+          provenance: false
+          cache-from: type=gha
+
+      # This summary IS the deploy handoff: paste the row into the provisioner's catalog.
+      - name: Summary
+        run: |
+          echo "Pushed \`$IMAGE:${{ inputs.version }}\` and \`$IMAGE:latest\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Catalog row -> ImageRepository=$IMAGE, ImageTag=${{ inputs.version }}, InternalPort=8080" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Mount a persistent volume at \`/data\` — downloads + history.json live there and must survive redeploys. ffmpeg is baked into the image." >> "$GITHUB_STEP_SUMMARY"

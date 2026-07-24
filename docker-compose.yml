@@ -1,0 +1,16 @@
+# Local development only. In the fleet this image is run by mk-provisioning, not by compose.
+services:
+  youtubedownloader:
+    build: .
+    image: mk-youtubedownloader:latest
+    container_name: mk-youtubedownloader
+    ports:
+      - "8080:8080"
+    volumes:
+      # One mount holds all durable state: /var/lib/mk-youtubedownloader is symlinked to /data
+      # in the image, so downloads + history.json survive container recreation.
+      - youtubedownloader_state:/data
+    restart: unless-stopped
+
+volumes:
+  youtubedownloader_state:

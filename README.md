@@ -1,56 +1,89 @@
-# YouTube Video Downloader
+# YouTube Downloader (Blazor Server)
 
-A simple .NET 8.0 console application that downloads YouTube **videos and
-playlists** using [YoutubeExplode](https://github.com/Tyrrrz/YoutubeExplode).
+A .NET 8 **Blazor Server** web app that downloads a YouTube video as any
+combination of **MP4** (video), **MP3** (audio) and **SRT** subtitles, and keeps
+a **history** of everything you've downloaded so you can tell what's already done.
 
-Run it, paste a URL, and it downloads to your **Downloads** folder:
+Built on [YoutubeExplode](https://github.com/Tyrrrz/YoutubeExplode); MP4 merging
+and MP3 transcoding use [ffmpeg](https://ffmpeg.org/) (bundled in the container).
 
-- **Video + audio** merged into a single `.mp4` (H.264/AAC).
-- **Prefers 1080p** — picks the best stream at or below 1080p (no giant 4K
-  files), falling back to the highest available if 1080p isn't offered.
-- **Subtitles** — every available caption track is saved as `Title.<lang>.srt`.
-- **Playlists** — paste a playlist URL and it downloads every video into a
-  sub-folder named after the playlist.
+## Features
 
-Merging requires [ffmpeg](https://ffmpeg.org/download.html). If ffmpeg isn't
-found, the app falls back to a combined stream (max ~720p) so it still works.
+- **Download page** — paste a video URL, tick the outputs you want, watch a live
+  progress bar over a SignalR circuit.
+  - **MP4** — best video + audio merged, prefers ≤1080p, falls back to a combined
+    stream (~720p) if ffmpeg is missing.
+  - **MP3** — highest-bitrate audio transcoded to MP3 (raw audio if ffmpeg is missing).
+  - **Subtitles** — every caption track saved as `Title.<lang>.srt`.
+- **History page** — a JSON-backed list (title, author, formats, date, link).
+  The download page warns you when a video is already in the history.
 
-## Requirements
+## Persistent data (survives redeploy)
 
-- .NET 8.0 SDK (or a newer SDK able to target net8.0)
-- ffmpeg on your `PATH` (for 1080p). Install on Windows with:
-  `winget install Gyan.FFmpeg` — then open a new terminal.
+Following the Maple fleet convention, the app writes all durable state — the
+`downloads/` folder and `history.json` — under the hard-coded container path
+**`/var/lib/mk-youtubedownloader`**, which the `Dockerfile` **symlinks onto
+`/data`**. Mount a volume at `/data` and everything survives container
+recreation on redeploy. (Outside a container the app just uses a `data/` folder
+next to the binary — see below.)
 
-## Usage
+## Deploy (container)
+
+Deployment mirrors the other Maple apps: a manual GitHub Actions workflow builds
+the image, verifies it serves `/health`, and pushes it to GHCR. Actual rollout is
+done out-of-band by **mk-provisioning** from the catalog row the workflow prints.
+
+- Workflow: **Actions → “Release Container” → Run workflow**, enter a version
+  (e.g. `1.0.0`).
+- Image: `ghcr.io/ericngo1972/youtubedownloader:<version>` (+ `:latest`).
+- Internal port **8080**; liveness at `/health` (and `/api/health`).
+- **Mount a persistent volume at `/data`.** `ffmpeg` is baked into the image.
+
+### Run the container locally
+
+```bash
+docker compose up --build      # http://localhost:8080, state in the named volume
+
+# or by hand, persisting to ./data on the host:
+docker build -t mk-youtubedownloader .
+docker run -d --name mk-youtubedownloader -p 8080:8080 \
+  -v "$PWD/data:/data" mk-youtubedownloader
+```
+
+## Run locally (without Docker)
+
+Requires the .NET 8 SDK and `ffmpeg` on your `PATH`.
 
 ```bash
 dotnet run
 ```
 
-```
-=== YouTube Video Downloader ===
+Data goes to a `data/` folder next to the app unless you override it:
 
-Enter the public YouTube video or playlist URL: <paste here>
+```bash
+# choose where downloads + history are stored
+export Storage__DataDirectory=/some/path      # Linux/macOS
+set    Storage__DataDirectory=C:\some\path    # Windows
 ```
-
-- **Video URL** (e.g. `https://www.youtube.com/watch?v=...` or `https://youtu.be/...`)
-  → downloads that one video. A `&list=` parameter on a video URL is ignored;
-  only a pure playlist URL triggers playlist mode.
-- **Playlist URL** (e.g. `https://www.youtube.com/playlist?list=...`)
-  → downloads every video in the playlist.
 
 ### Where ffmpeg is found
 
 In order: `FFMPEG_PATH` env var → next to the executable → current directory →
 system `PATH`.
 
-```bash
-set FFMPEG_PATH=C:\tools\ffmpeg\bin\ffmpeg.exe   # Windows
-export FFMPEG_PATH=/usr/bin/ffmpeg               # Linux/macOS
-```
+## Configuration
+
+| Setting        | Env var                  | Default                                                        |
+|----------------|--------------------------|----------------------------------------------------------------|
+| Data directory | `Storage__DataDirectory` | `/var/lib/mk-youtubedownloader` in-container (→ `/data`), else `data/` next to the app |
+| HTTP port      | `ASPNETCORE_HTTP_PORTS`  | `8080` (container)                                             |
+| ffmpeg path    | `FFMPEG_PATH`            | resolved from `PATH`                                           |
 
 ## Notes
 
-- Files are saved to `%USERPROFILE%\Downloads` (playlists go in a sub-folder).
-- Only download content you have the right to download. Respect YouTube's
-  Terms of Service and applicable copyright law.
+- Only download content you have the right to download. Respect YouTube's Terms
+  of Service and applicable copyright law.
+- Downloads run as **server-side background jobs** — closing the browser tab
+  doesn't cancel them (they're lost only if the server process itself restarts).
+- The old lyrics→SRT `sync` console command was dropped in the Blazor rewrite; it
+  remains in git history if needed.

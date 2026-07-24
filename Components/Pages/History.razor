@@ -1,0 +1,126 @@
+@page "/history"
+@rendermode InteractiveServer
+@inject HistoryService Store
+
+<PageTitle>History</PageTitle>
+
+<div class="row-between">
+    <h1>@(_showArchived ? "Archived" : "Download history")</h1>
+    <div class="header-actions">
+        @if (_showArchived || _archivedCount > 0)
+        {
+            <button class="btn btn-ghost" @onclick="ToggleView">
+                @(_showArchived ? "Back to history" : $"Show archived ({_archivedCount})")
+            </button>
+        }
+    </div>
+</div>
+
+@if (_records.Count == 0)
+{
+    <div class="card hint">@(_showArchived ? "Nothing archived." : "Nothing downloaded yet.")</div>
+}
+else
+{
+    <div class="card">
+        <table class="history">
+            <thead>
+                <tr>
+                    <th>Title</th>
+                    <th>Author</th>
+                    <th>Download</th>
+                    <th>When</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in _records)
+                {
+                    <tr>
+                        <td>
+                            <a href="@r.Url" target="_blank" rel="noopener">@r.Title</a>
+                            <div class="hint">@r.Duration</div>
+                            @{ var audioIndex = FirstAudioIndex(r); }
+                            @if (audioIndex >= 0)
+                            {
+                                <button class="btn-play" data-audio="audio-@r.Id"
+                                        onclick="ytdlPlayer.toggle('audio-@r.Id')">▶ Play</button>
+                                <audio id="audio-@r.Id" preload="none"
+                                       src="@($"stream/{r.Id}/{audioIndex}")"
+                                       data-title="@r.Title" data-artist="@r.Author"></audio>
+                            }
+                        </td>
+                        <td>@r.Author</td>
+                        <td>
+                            @for (var i = 0; i < r.Files.Count; i++)
+                            {
+                                <a class="tag tag-link" href="@($"files/{r.Id}/{i}")" download>@FileLabel(r.Files[i])</a>
+                            }
+                        </td>
+                        <td class="hint">@r.DownloadedAt.LocalDateTime.ToString("g")</td>
+                        <td>
+                            @if (_showArchived)
+                            {
+                                <button class="btn-mini" @onclick="() => SetArchived(r.Id, false)">Restore</button>
+                            }
+                            else
+                            {
+                                <button class="btn-mini" @onclick="() => SetArchived(r.Id, true)">Archive</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private IReadOnlyList<DownloadRecord> _records = Array.Empty<DownloadRecord>();
+    private bool _showArchived;
+    private int _archivedCount;
+
+    protected override void OnInitialized() => Reload();
+
+    private void Reload()
+    {
+        _records = _showArchived ? Store.ArchivedItems() : Store.Active();
+        _archivedCount = Store.ArchivedCount();
+    }
+
+    private void ToggleView()
+    {
+        _showArchived = !_showArchived;
+        Reload();
+    }
+
+    private async Task SetArchived(string id, bool archived)
+    {
+        await Store.SetArchivedAsync(id, archived);
+        Reload();
+    }
+
+    private static readonly string[] AudioExts = { ".mp3", ".m4a" };
+
+    /// <summary>Index of the first playable audio file in a record, or -1.</summary>
+    private static int FirstAudioIndex(DownloadRecord r)
+    {
+        for (var i = 0; i < r.Files.Count; i++)
+            if (AudioExts.Contains(Path.GetExtension(r.Files[i]).ToLowerInvariant()))
+                return i;
+        return -1;
+    }
+
+    /// <summary>Short button label for a file, e.g. "MP4", "MP3", "SRT EN".</summary>
+    private static string FileLabel(string path)
+    {
+        var ext = Path.GetExtension(path).TrimStart('.').ToUpperInvariant();
+        if (ext == "SRT")
+        {
+            var stem = Path.GetFileNameWithoutExtension(path); // "Title.en"
+            var dot = stem.LastIndexOf('.');
+            if (dot >= 0) return $"SRT {stem[(dot + 1)..].ToUpperInvariant()}";
+        }
+        return ext;
+    }
+}
