@@ -11,6 +11,7 @@ builder.Services.AddRazorComponents()
 // One YouTube client and one history store shared across the app.
 builder.Services.AddSingleton<YoutubeClient>();
 builder.Services.AddSingleton<HistoryService>();
+builder.Services.AddSingleton<PlaylistService>();
 builder.Services.AddSingleton<YoutubeDownloadService>();
 
 // The download queue: one instance is both the queue API and the hosted worker.

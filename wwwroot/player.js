@@ -1,4 +1,5 @@
-// Custom play/pause buttons for the History page + "resume where you left off".
+// Custom play/pause buttons for the History page, "resume where you left off",
+// and continuous playback (auto-advance to the next track, like an album/queue).
 //
 // Playback is native (keeps going when the iPhone screen locks) and streams
 // straight from /stream. Each track's position is saved in localStorage under a
@@ -13,10 +14,30 @@ window.ytdlPlayer = {
         } else {
             el.pause();
         }
+    },
+    // "Play all": start the first track on the page; 'ended' auto-advances the rest.
+    playFirst: function () {
+        var a = document.querySelector('audio');
+        if (a) a.play();
     }
 };
 
 function ytdlPosKey(id) { return 'ytdl-pos-' + id; }
+
+// All <audio> elements on the page, in list (DOM) order — this is the play queue.
+function ytdlQueue() { return Array.prototype.slice.call(document.querySelectorAll('audio')); }
+
+// Play the track `delta` positions from `el` (e.g. +1 = next, -1 = previous).
+function ytdlPlayRelative(el, delta) {
+    var q = ytdlQueue();
+    var i = q.indexOf(el);
+    if (i < 0) return;
+    var j = i + delta;
+    if (j >= 0 && j < q.length) {
+        q[j].scrollIntoView({ block: 'nearest' });
+        q[j].play();
+    }
+}
 
 function ytdlUpdateButton(el, playing) {
     if (!el || el.tagName !== 'AUDIO') return;
@@ -35,7 +56,8 @@ document.addEventListener('play', function (e) {
         if (other !== el) other.pause();
     });
 
-    // Lock-screen "Now Playing" info + controls (iOS/Android).
+    // Lock-screen "Now Playing" info + controls (iOS/Android), including next/prev
+    // so the queue can be driven from the lock screen.
     if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
             title: el.dataset.title || document.title,
@@ -44,6 +66,8 @@ document.addEventListener('play', function (e) {
         });
         navigator.mediaSession.setActionHandler('play', function () { el.play(); });
         navigator.mediaSession.setActionHandler('pause', function () { el.pause(); });
+        navigator.mediaSession.setActionHandler('nexttrack', function () { ytdlPlayRelative(el, 1); });
+        navigator.mediaSession.setActionHandler('previoustrack', function () { ytdlPlayRelative(el, -1); });
     }
 
     ytdlUpdateButton(el, true);
@@ -72,10 +96,11 @@ document.addEventListener('timeupdate', function (e) {
     }
 }, true);
 
-// Finished -> forget the position so it restarts from the top next time.
+// Finished -> forget this track's position, then auto-advance to the next one.
 document.addEventListener('ended', function (e) {
     var el = e.target;
     if (!el || el.tagName !== 'AUDIO') return;
     localStorage.removeItem(ytdlPosKey(el.id));
     ytdlUpdateButton(el, false);
+    ytdlPlayRelative(el, 1);   // continuous playback: play the next file in the list
 }, true);

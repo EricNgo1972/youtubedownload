@@ -22,56 +22,47 @@
 }
 else
 {
-    <div class="card">
-        <table class="history">
-            <thead>
-                <tr>
-                    <th>Title</th>
-                    <th>Author</th>
-                    <th>Download</th>
-                    <th>When</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var r in _records)
-                {
-                    <tr>
-                        <td>
-                            <a href="@r.Url" target="_blank" rel="noopener">@r.Title</a>
-                            <div class="hint">@r.Duration</div>
-                            @{ var audioIndex = FirstAudioIndex(r); }
-                            @if (audioIndex >= 0)
-                            {
-                                <button class="btn-play" data-audio="audio-@r.Id"
-                                        onclick="ytdlPlayer.toggle('audio-@r.Id')">▶ Play</button>
-                                <audio id="audio-@r.Id" preload="none"
-                                       src="@($"stream/{r.Id}/{audioIndex}")"
-                                       data-title="@r.Title" data-artist="@r.Author"></audio>
-                            }
-                        </td>
-                        <td>@r.Author</td>
-                        <td>
-                            @for (var i = 0; i < r.Files.Count; i++)
-                            {
-                                <a class="tag tag-link" href="@($"files/{r.Id}/{i}")" download>@FileLabel(r.Files[i])</a>
-                            }
-                        </td>
-                        <td class="hint">@r.DownloadedAt.LocalDateTime.ToString("g")</td>
-                        <td>
-                            @if (_showArchived)
-                            {
-                                <button class="btn-mini" @onclick="() => SetArchived(r.Id, false)">Restore</button>
-                            }
-                            else
-                            {
-                                <button class="btn-mini" @onclick="() => SetArchived(r.Id, true)">Archive</button>
-                            }
-                        </td>
-                    </tr>
-                }
-            </tbody>
-        </table>
+    <div class="hist-list">
+        @foreach (var r in _records)
+        {
+            var audioIndex = FirstAudioIndex(r);
+            <div class="hist-card">
+                <div class="hist-top">
+                    <a class="hist-title" href="@r.Url" target="_blank" rel="noopener">@r.Title</a>
+                    @if (_showArchived)
+                    {
+                        <button class="btn-mini" @onclick="() => SetArchived(r.Id, false)">Restore</button>
+                    }
+                    else
+                    {
+                        <button class="btn-mini" @onclick="() => SetArchived(r.Id, true)">Archive</button>
+                    }
+                </div>
+
+                <div class="hist-meta">
+                    <span>@r.Author</span>
+                    @if (!string.IsNullOrWhiteSpace(r.Duration)) { <span>· @r.Duration</span> }
+                    <span>· @r.DownloadedAt.LocalDateTime.ToString("g")</span>
+                </div>
+
+                <div class="hist-actions">
+                    @if (audioIndex >= 0)
+                    {
+                        <button class="btn-play" data-audio="audio-@r.Id"
+                                onclick="ytdlPlayer.toggle('audio-@r.Id')">▶ Play</button>
+                        <audio id="audio-@r.Id" preload="none"
+                               src="@($"stream/{r.Id}/{audioIndex}")"
+                               data-title="@r.Title" data-artist="@r.Author"></audio>
+                    }
+                    <div class="hist-files">
+                        @for (var i = 0; i < r.Files.Count; i++)
+                        {
+                            <a class="tag tag-link" href="@($"files/{r.Id}/{i}")" download>@FileLabel(r.Files[i])</a>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
     </div>
 }
 

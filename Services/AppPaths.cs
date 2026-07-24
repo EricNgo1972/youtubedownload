@@ -31,4 +31,7 @@ public static class AppPaths
 
     public static string HistoryFile(IConfiguration config) =>
         Path.Combine(DataDir(config), "history.json");
+
+    public static string PlaylistsFile(IConfiguration config) =>
+        Path.Combine(DataDir(config), "playlists.json");
 }

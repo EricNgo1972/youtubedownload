@@ -1,0 +1,174 @@
+@page "/playlists"
+@rendermode InteractiveServer
+@inject PlaylistService Store
+@inject HistoryService History
+
+<PageTitle>Playlists</PageTitle>
+
+<h1>Playlists</h1>
+
+<div class="card">
+    <label class="field-label" for="plname">New playlist</label>
+    <div class="pl-create">
+        <input id="plname" class="text-input" placeholder="e.g. Cultivation stories"
+               @bind="_newName" @bind:event="oninput" />
+        <button class="btn btn-primary" @onclick="Create"
+                disabled="@string.IsNullOrWhiteSpace(_newName)">Create</button>
+    </div>
+</div>
+
+@if (_playlists.Count == 0)
+{
+    <div class="card hint">No playlists yet. Create one above, then add tracks from your History.</div>
+}
+else
+{
+    <div class="hist-list">
+        @foreach (var pl in _playlists)
+        {
+            <div class="hist-card">
+                <div class="hist-top">
+                    <button class="pl-name-btn" @onclick="() => Select(pl.Id)">
+                        @(pl.Id == _selectedId ? "▾" : "▸") @pl.Name
+                    </button>
+                    <span class="pl-head-right">
+                        <span class="hint">@pl.RecordIds.Count track(s)</span>
+                        <button class="btn-mini" @onclick="() => Delete(pl.Id)">Delete</button>
+                    </span>
+                </div>
+
+                @if (pl.Id == _selectedId)
+                {
+                    var items = Resolve(pl);
+                    var playable = items.Count(i => i.AudioIndex >= 0);
+                    <div class="pl-detail">
+                        @if (playable > 0)
+                        {
+                            <div class="pl-actions">
+                                <button class="btn-play" onclick="ytdlPlayer.playFirst()">▶ Play all (@playable)</button>
+                                <span class="hint">plays top-to-bottom, auto-advancing</span>
+                            </div>
+                        }
+
+                        @if (items.Count == 0)
+                        {
+                            <div class="hint">Empty — add tracks from the list below.</div>
+                        }
+                        else
+                        {
+                            <ol class="pl-items">
+                                @for (var idx = 0; idx < items.Count; idx++)
+                                {
+                                    var it = items[idx];
+                                    <li class="pl-item">
+                                        <span class="pl-item-title">@it.Title</span>
+                                        <span class="pl-item-ctl">
+                                            @if (it.AudioIndex >= 0)
+                                            {
+                                                <button class="btn-mini" title="Play"
+                                                        onclick="ytdlPlayer.toggle('audio-@it.RecordId')">▶</button>
+                                            }
+                                            <button class="btn-mini" title="Move up"
+                                                    @onclick="() => Move(pl.Id, it.RecordId, -1)" disabled="@(idx == 0)">▲</button>
+                                            <button class="btn-mini" title="Move down"
+                                                    @onclick="() => Move(pl.Id, it.RecordId, 1)" disabled="@(idx == items.Count - 1)">▼</button>
+                                            <button class="btn-mini" title="Remove"
+                                                    @onclick="() => Remove(pl.Id, it.RecordId)">✕</button>
+                                        </span>
+                                        @if (it.AudioIndex >= 0)
+                                        {
+                                            <audio id="audio-@it.RecordId" preload="none"
+                                                   src="@($"stream/{it.RecordId}/{it.AudioIndex}")"
+                                                   data-title="@it.Title" data-artist="@it.Author"></audio>
+                                        }
+                                    </li>
+                                }
+                            </ol>
+                        }
+
+                        <div class="pl-add">
+                            <div class="field-label">Add from history</div>
+                            @{ var addable = Addable(pl); }
+                            @if (addable.Count == 0)
+                            {
+                                <div class="hint">All your playable history tracks are already here.</div>
+                            }
+                            else
+                            {
+                                @foreach (var rec in addable)
+                                {
+                                    <div class="pl-add-row">
+                                        <span class="pl-add-title">@rec.Title</span>
+                                        <button class="btn-mini" @onclick="() => Add(pl.Id, rec.Id)">+ Add</button>
+                                    </div>
+                                }
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private IReadOnlyList<Playlist> _playlists = Array.Empty<Playlist>();
+    private string _newName = "";
+    private string? _selectedId;
+
+    protected override void OnInitialized() => _playlists = Store.All();
+
+    private sealed record Item(string RecordId, string Title, string Author, int AudioIndex);
+
+    private List<Item> Resolve(Playlist pl)
+    {
+        var list = new List<Item>();
+        foreach (var rid in pl.RecordIds)
+        {
+            var rec = History.Get(rid);
+            list.Add(rec is null
+                ? new Item(rid, "(removed from history)", "", -1)
+                : new Item(rid, rec.Title, rec.Author, FirstAudioIndex(rec)));
+        }
+        return list;
+    }
+
+    private List<DownloadRecord> Addable(Playlist pl)
+    {
+        var inList = pl.RecordIds.ToHashSet();
+        return History.All()
+            .Where(r => !inList.Contains(r.Id) && FirstAudioIndex(r) >= 0)
+            .ToList();
+    }
+
+    private async Task Create()
+    {
+        if (string.IsNullOrWhiteSpace(_newName)) return;
+        var pl = await Store.CreateAsync(_newName);
+        _newName = "";
+        _playlists = Store.All();
+        _selectedId = pl.Id;
+    }
+
+    private void Select(string id) => _selectedId = _selectedId == id ? null : id;
+
+    private async Task Delete(string id)
+    {
+        await Store.DeleteAsync(id);
+        if (_selectedId == id) _selectedId = null;
+        _playlists = Store.All();
+    }
+
+    private async Task Add(string plId, string recordId)    { await Store.AddItemAsync(plId, recordId);    _playlists = Store.All(); }
+    private async Task Remove(string plId, string recordId) { await Store.RemoveItemAsync(plId, recordId); _playlists = Store.All(); }
+    private async Task Move(string plId, string recordId, int delta) { await Store.MoveAsync(plId, recordId, delta); _playlists = Store.All(); }
+
+    private static readonly string[] AudioExts = { ".mp3", ".m4a" };
+
+    private static int FirstAudioIndex(DownloadRecord r)
+    {
+        for (var i = 0; i < r.Files.Count; i++)
+            if (AudioExts.Contains(Path.GetExtension(r.Files[i]).ToLowerInvariant())) return i;
+        return -1;
+    }
+}

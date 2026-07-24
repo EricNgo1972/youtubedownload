@@ -102,7 +102,7 @@ h1 { font-size: 1.5rem; margin: 18px 0; }
 .success strong { color: var(--ok); }
 .files { margin: 10px 0; padding-left: 18px; }
 
-.row-between { display: flex; align-items: center; justify-content: space-between; }
+.row-between { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
 
 .playlist-opt {
     margin-top: 4px;
@@ -141,11 +141,82 @@ h1 { font-size: 1.5rem; margin: 18px 0; }
 .badge-failed    { background: #7f1d2b; color: #fff; }
 .badge-cancelled { background: #4b5563; color: #e5e7eb; }
 
-.history { width: 100%; border-collapse: collapse; }
-.history th, .history td { text-align: left; padding: 12px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
-.history th { color: var(--muted); font-weight: 600; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
-.history a { color: var(--text); text-decoration: none; font-weight: 600; }
-.history a:hover { color: var(--accent-2); }
+/* History: responsive card list (mobile-friendly, no table overflow). */
+.hist-list { display: flex; flex-direction: column; gap: 12px; }
+
+.hist-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px;
+}
+
+.hist-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+
+.hist-title {
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 600;
+    line-height: 1.35;
+    overflow-wrap: anywhere;   /* long titles wrap instead of overflowing */
+    flex: 1;
+    min-width: 0;
+}
+.hist-title:hover { color: var(--accent-2); }
+
+.hist-top .btn-mini { flex: 0 0 auto; }
+
+.hist-meta {
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: .82rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.hist-actions {
+    margin-top: 14px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
+.hist-files { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Playlists */
+.pl-create { display: flex; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
+.pl-create .text-input { flex: 1; min-width: 180px; }
+
+.pl-name-btn {
+    background: none; border: none; color: var(--text);
+    font-size: 1.05rem; font-weight: 600; cursor: pointer;
+    text-align: left; padding: 0; flex: 1; min-width: 0; overflow-wrap: anywhere;
+}
+.pl-name-btn:hover { color: var(--accent-2); }
+
+.pl-head-right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+
+.pl-detail { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; }
+.pl-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+
+.pl-items { list-style: none; margin: 0 0 16px; padding: 0; counter-reset: pl; }
+.pl-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0; border-bottom: 1px solid var(--border);
+}
+.pl-item::before {
+    counter-increment: pl; content: counter(pl);
+    color: var(--muted); font-size: .8rem; min-width: 1.4em; flex: 0 0 auto;
+}
+.pl-item-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pl-item-ctl { display: flex; gap: 4px; flex: 0 0 auto; }
+.pl-item-ctl .btn-mini { padding: 4px 8px; }
+
+.pl-add { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.pl-add-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; }
+.pl-add-title { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: .9rem; }
 
 .tag {
     display: inline-block;
@@ -184,14 +255,13 @@ h1 { font-size: 1.5rem; margin: 18px 0; }
 
 .btn-play {
     display: inline-block;
-    margin-top: 8px;
-    padding: 6px 14px;
+    padding: 8px 16px;
     border: none;
     border-radius: 8px;
     background: var(--accent-2);
     color: #fff;
     font-weight: 600;
-    font-size: .85rem;
+    font-size: .9rem;
     cursor: pointer;
 }
 .btn-play:hover { filter: brightness(1.1); }
