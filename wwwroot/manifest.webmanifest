@@ -1,8 +1,8 @@
 {
-  "name": "My Music — Offline",
+  "name": "My Music",
   "short_name": "My Music",
-  "description": "Save playlists to your phone and play them offline.",
-  "start_url": "/offline.html",
+  "description": "Your playlists, on your phone, online or off.",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",

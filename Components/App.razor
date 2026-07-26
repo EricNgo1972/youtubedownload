@@ -20,21 +20,23 @@
         <div class="reconnect-box"><span class="reconnect-spinner"></span> Reconnecting…</div>
     </div>
 
-    <script src="_framework/blazor.web.js"></script>
-    <script src="reconnect.js"></script>
+    @* Register the service worker FIRST and inline: it is what makes this page work
+       offline at all, so it must not queue behind blazor.web.js. *@
+    <script>
+        if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function () { });
+    </script>
+
+    @* blazor.web.js is parser-blocking, so everything the offline player needs is
+       loaded BEFORE it. With no circuit the service worker serves an empty stub for it
+       and the page still works — but only if these have already run. *@
     <script src="offline-store.js"></script>
     <script src="player.js"></script>
     <script src="playlist-offline.js"></script>
+    <script src="share.js"></script>
     <script src="nav.js"></script>
-    <script>
-        // Register the offline service worker so the app is installable and the
-        // /offline.html player works with no network. It only intercepts the offline
-        // page, its assets and /stream/… audio — the live Blazor circuit is untouched.
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', function () {
-                navigator.serviceWorker.register('/sw.js').catch(function () {});
-            });
-        }
-    </script>
+    <script src="pwa-install.js"></script>
+
+    <script src="_framework/blazor.web.js"></script>
+    <script src="reconnect.js"></script>
 </body>
 </html>

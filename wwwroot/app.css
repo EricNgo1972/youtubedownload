@@ -133,7 +133,7 @@ body {
     }
 }
 
-/* Inline, dismissible "install as app" card (see pwa-install.js; Downloads page #pwa-slot). */
+/* Inline, dismissible "install as app" card (see pwa-install.js; #pwa-slot in the layout). */
 .pwa-card {
     display: flex;
     align-items: center;
@@ -360,6 +360,9 @@ h1 { font-size: 1.5rem; margin: 18px 0; }
     counter-increment: pl; content: counter(pl);
     color: var(--muted); font-size: .8rem; min-width: 1.4em; flex: 0 0 auto;
 }
+/* ⤓ in front of a track whose audio is on this device. Fixed width whether or not it's
+   set, so titles stay aligned down the list. */
+.trk-off { flex: 0 0 auto; width: 1em; font-size: .95rem; color: var(--ok); line-height: 1; }
 .pl-item-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .pl-item-ctl { display: flex; gap: 4px; flex: 0 0 auto; }
 .pl-item-ctl .btn-mini { padding: 4px 8px; }
@@ -529,14 +532,56 @@ h1 { font-size: 1.5rem; margin: 18px 0; }
 .np-artist { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .np-ctl { max-width: 760px; margin: 0 auto; display: flex; align-items: center; justify-content: center; gap: 22px; }
 .np-ctl button { background: none; border: 0; color: var(--text); font-size: 25px; cursor: pointer; line-height: 1; }
-.np-play { width: 54px; height: 54px; border-radius: 50%; background: var(--ok) !important; color: #052018 !important;
+.np-play { position: relative; width: 54px; height: 54px; border-radius: 50%; background: var(--ok) !important; color: #052018 !important;
            display: flex; align-items: center; justify-content: center; }
+/* Buffering: hide the glyph, show a spinner so play never looks frozen. */
+.np-play.loading { color: transparent !important; }
+.np-play.loading::after {
+    content: ''; position: absolute; width: 22px; height: 22px;
+    border: 3px solid rgba(5, 32, 24, 0.35); border-top-color: #052018;
+    border-radius: 50%; animation: ytdl-spin 0.8s linear infinite;
+}
+.np-status { display: none; font-size: 12px; color: var(--accent); margin-top: 3px; }
+.np-status.show { display: block; }
+/* Where this track's audio is coming from — makes "it's downloaded" visible, so a
+   pause to buffer is never mistaken for the device ignoring its own copy. */
+.np-src { font-size: 11px; color: var(--muted); margin-top: 2px; letter-spacing: .01em; }
+.np-src.off { color: var(--ok); }
 .np-toggle { font-size: 19px; opacity: .45; }
 .np-toggle.on { opacity: 1; color: var(--ok); }
 body.has-np .page { padding-bottom: 140px; }
 
-/* Downloads page: when offline, the live Blazor-page links can't load — show them disabled. */
-body.offline-mode .needs-online { opacity: .4; pointer-events: none; }
+/* Transient toast (e.g. "Link copied"), sits above the now-playing bar. */
+.ytdl-toast {
+    position: fixed;
+    left: 50%;
+    bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+    transform: translateX(-50%) translateY(8px);
+    z-index: 2100;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 10px 16px;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    opacity: 0;
+    transition: opacity 0.25s, transform 0.25s;
+    pointer-events: none;
+}
+.ytdl-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* Offline / no-circuit mode. Playing is untouched; only the server-backed controls
+   (create, add, reorder, rename, delete, Library) go quiet, so the page never offers an
+   action that would silently do nothing. */
+.offline-banner {
+    background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--accent-2);
+    border-radius: 10px; padding: 10px 14px; margin-bottom: 14px;
+    font-size: .85rem; color: var(--muted); line-height: 1.5;
+}
+.offline-banner b { color: var(--text); }
+body.no-circuit .needs-circuit { opacity: .35; pointer-events: none; }
 
 .header-actions { display: flex; gap: 8px; }
 

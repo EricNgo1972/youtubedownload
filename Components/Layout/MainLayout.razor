@@ -4,13 +4,16 @@
     <header class="topbar">
         <span class="brand">🎵 My Music</span>
         <button class="nav-kebab" aria-label="Menu" onclick="ytdlNav.toggle(event)">⋮</button>
+        @* No separate "Downloads" destination: a playlist being on the device is a
+           property shown on the playlist itself (⬇/✓), not another page. *@
         <nav>
             <NavLink class="navlink" href="" Match="NavLinkMatch.All">Playlists</NavLink>
-            <NavLink class="navlink" href="library">Library</NavLink>
-            <a class="navlink" href="/offline.html">⬇ Downloads</a>
+            <NavLink class="navlink needs-circuit" href="library">Library</NavLink>
         </nav>
     </header>
     <main>
+        <div id="offline-banner" class="offline-banner" hidden></div>
+        <div id="pwa-slot"></div>
         @Body
     </main>
 </div>

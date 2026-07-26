@@ -99,6 +99,9 @@ else
                         <button class="btn-play play-label" data-track-url="@($"/stream/{r.Id}/{audioIndex}")"
                                 data-title="@r.Title" data-artist="@r.Author"
                                 onclick="ytdlPlayer.playEl(this)">▶ Play</button>
+                        <button class="btn-mini" title="Share a listen link"
+                                data-share-id="@r.Id" data-share-title="@r.Title"
+                                onclick="ytdlShare(this)">🔗 Share</button>
                     }
                     <div class="hist-files">
                         @for (var i = 0; i < r.Files.Count; i++)

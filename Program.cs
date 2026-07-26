@@ -87,7 +87,85 @@ app.MapGet("/api/playlists", (PlaylistService playlists, HistoryService history)
     return Results.Json(result);
 });
 
+// A shareable "listen" page for a single track: a self-contained player anyone can open
+// (no app or account needed) at /listen/{id}. The record id is an unguessable GUID, so
+// the link is effectively unlisted — anyone who has it can listen.
+app.MapGet("/listen/{id}", (string id, HistoryService history, HttpRequest req) =>
+{
+    var rec = history.Get(id);
+    var idx = rec is null ? -1 : Media.FirstAudioIndex(rec);
+    if (rec is null || idx < 0)
+        return Results.Content(ListenPage.NotFound(), "text/html; charset=utf-8");
+    var baseUrl = $"{req.Scheme}://{req.Host}";
+    return Results.Content(ListenPage.Html(rec, idx, baseUrl), "text/html; charset=utf-8");
+});
+
 app.Run();
+
+internal static class ListenPage
+{
+    public static string Html(DownloadRecord rec, int idx, string baseUrl)
+    {
+        var title = System.Net.WebUtility.HtmlEncode(rec.Title);
+        var rawAuthor = rec.Author is { Length: > 0 } a && a != "Uploaded" ? rec.Author : "";
+        var author = System.Net.WebUtility.HtmlEncode(rawAuthor);
+        var stream = $"/stream/{rec.Id}/{idx}";
+        var absStream = baseUrl + stream;
+        var absListen = $"{baseUrl}/listen/{rec.Id}";
+        var authorHtml = author.Length > 0 ? $"<div class=\"auth\">{author}</div>" : "";
+        var ogDesc = (author.Length > 0 ? author + " · " : "") + "Shared via My Music";
+
+        return $$"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1220">
+<title>{{title}}</title>
+<meta property="og:type" content="music.song">
+<meta property="og:title" content="{{title}}">
+<meta property="og:description" content="{{ogDesc}}">
+<meta property="og:audio" content="{{absStream}}">
+<meta property="og:url" content="{{absListen}}">
+<link rel="icon" href="/icon.svg">
+<style>
+  :root{--bg:#0f1220;--panel:#1a1e33;--text:#e7e9f3;--muted:#9aa0bd;--border:#2c3252;--ok:#34d399}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+       background:var(--bg);color:var(--text);padding:24px;
+       font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .card{width:100%;max-width:440px;background:var(--panel);border:1px solid var(--border);
+        border-radius:20px;padding:28px 24px;text-align:center}
+  .ico{font-size:44px;margin-bottom:10px}
+  h1{font-size:1.3rem;margin:0 0 6px;line-height:1.3;word-break:break-word}
+  .auth{color:var(--muted);font-size:.95rem;margin-bottom:20px}
+  audio{width:100%}
+  .foot{margin-top:20px;font-size:.8rem;color:var(--muted)}
+  .foot a{color:var(--ok);text-decoration:none}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="ico">🎵</div>
+    <h1>{{title}}</h1>
+    {{authorHtml}}
+    <audio controls autoplay preload="metadata" src="{{stream}}"></audio>
+    <div class="foot">Shared via <a href="/">My Music</a></div>
+  </div>
+</body>
+</html>
+""";
+    }
+
+    public static string NotFound() => """
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Track unavailable</title>
+<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;text-align:center;
+padding:24px;background:#0f1220;color:#9aa0bd;font-family:system-ui,sans-serif}h1{color:#e7e9f3;margin:0 0 8px}</style>
+</head><body><div><h1>Track unavailable</h1><p>This shared track no longer exists.</p></div></body></html>
+""";
+}
 
 internal static class Media
 {

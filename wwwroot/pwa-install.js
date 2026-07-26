@@ -1,5 +1,5 @@
-// "Install this app" prompt — rendered inline into #pwa-slot (the Downloads page),
-// where installing is contextual: it's the page you'd open offline from the home screen.
+// "Install this app" prompt — rendered inline into #pwa-slot (in the main layout):
+// installed is how you open your saved playlists from the home screen with no network.
 //  - Chrome/Android: captures beforeinstallprompt and offers a native Install button.
 //  - iOS Safari: no install API, so it shows the manual Share → Add to Home Screen steps.
 // Stays quiet if already installed, previously dismissed, or if no slot exists on the page.
