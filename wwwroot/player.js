@@ -98,10 +98,21 @@
     // of any size), so that part of the frame is only redrawn when it can have changed.
     var paintedUrl, paintedCtx, paintedNone = true;
 
+    // Write only what actually differs. This is not an optimisation — it is what makes
+    // render() safe to run from a MutationObserver. Assigning textContent replaces the
+    // element's children, which IS a childList mutation, so an unconditional write would
+    // retrigger the observer that called us and the loop would never settle. Worse, it
+    // starves every other debounced observer on the page: playlist-offline.js waits for
+    // 150ms of quiet before repainting the "Offline / Not saved" markers, and a render
+    // storm means that quiet never arrives and the markers stay on their placeholder.
+    function txt(el, v) { if (el && el.textContent !== v) el.textContent = v; }
+    function sty(el, prop, v) { if (el && el.style[prop] !== v) el.style[prop] = v; }
+
     /// Draw the current frame. `force` redraws the page-wide marks too — used when the
     /// DOM has been replaced and the elements we last marked no longer exist.
     function render(force) {
-        // 1. Marks that live on the page's own elements (rows, playlist cards).
+        // 1. Marks that live on the page's own elements (rows, playlist cards). These are
+        //    class toggles, which are idempotent and not childList changes.
         if (force || paintedNone || vm.url !== paintedUrl || vm.ctxId !== paintedCtx) {
             document.querySelectorAll('.trk[data-track-url]').forEach(function (el) {
                 el.classList.toggle('playing', !!vm.url && el.getAttribute('data-track-url') === vm.url);
@@ -122,57 +133,50 @@
 
         // 2. The mini bar.
         if (bar) bar.classList.toggle('show', vm.barVisible);
-        if (elTitle) {
-            elTitle.textContent = vm.title || '—';
-            elArtist.textContent = vm.author || '';
-            elArt.textContent = mono(vm.title);
-            elArt.style.background = tint(vm.url || '');
-        }
-        if (elStatus) {
-            elStatus.textContent = vm.note;
-            elStatus.classList.toggle('show', !!vm.note);
-        }
+        txt(elTitle, vm.title || '—');
+        txt(elArtist, vm.author || '');
+        txt(elArt, mono(vm.title));
+        sty(elArt, 'background', tint(vm.url || ''));
+        txt(elStatus, vm.note);
+        if (elStatus) elStatus.classList.toggle('show', !!vm.note);
 
         var glyph = vm.playing ? '❙❙' : '▶';
         var loading = vm.status === 'loading';
         [elPlay, $('npf-play')].forEach(function (b) {
             if (!b) return;
-            b.textContent = glyph;
+            txt(b, glyph);
             b.classList.toggle('loading', loading);
         });
 
         // 3. The full-screen player. Only worth drawing while it is open.
         if (full) full.classList.toggle('show', vm.fullOpen);
         if (vm.fullOpen && full) {
-            $('npf-from').textContent = vm.ctx ? 'Playing from ' + vm.ctx : 'Playing from library';
-            $('npf-title').textContent = vm.title || '';
-            $('npf-artist').textContent = vm.author || '';
-            var art = $('npf-art');
-            art.textContent = mono(vm.title);
-            art.style.background = tint(vm.url || '');
-            var badge = $('npf-badge');
-            badge.textContent = vm.badge;
-            badge.classList.toggle('on', vm.onDevice);
+            txt($('npf-from'), vm.ctx ? 'Playing from ' + vm.ctx : 'Playing from library');
+            txt($('npf-title'), vm.title || '');
+            txt($('npf-artist'), vm.author || '');
+            txt($('npf-art'), mono(vm.title));
+            sty($('npf-art'), 'background', tint(vm.url || ''));
+            txt($('npf-badge'), vm.badge);
+            $('npf-badge').classList.toggle('on', vm.onDevice);
 
             var pct = (isFinite(vm.dur) && vm.dur > 0) ? (vm.pos / vm.dur) * 100 : 0;
-            $('npf-fill').style.width = pct + '%';
-            $('npf-pos').textContent = fmt(vm.pos);
-            $('npf-dur').textContent = isFinite(vm.dur) ? fmt(vm.dur) : '—';
+            sty($('npf-fill'), 'width', pct + '%');
+            txt($('npf-pos'), fmt(vm.pos));
+            txt($('npf-dur'), isFinite(vm.dur) ? fmt(vm.dur) : '—');
 
             $('npf-repeat').classList.toggle('on', vm.repeat);
             $('npf-shuffle').classList.toggle('on', vm.shuffle);
 
-            var btn = $('npf-lyrbtn'), box = $('npf-lyrics'), cover = $('npf-art');
-            btn.textContent = vm.tab === 'lyrics' ? 'Cover' : 'Lyrics';
+            var btn = $('npf-lyrbtn');
+            txt(btn, vm.tab === 'lyrics' ? 'Cover' : 'Lyrics');
             btn.classList.toggle('on', vm.tab === 'lyrics');
-            box.hidden = vm.tab !== 'lyrics';
-            cover.hidden = vm.tab === 'lyrics';
+            $('npf-lyrics').hidden = vm.tab !== 'lyrics';
+            $('npf-art').hidden = vm.tab === 'lyrics';
             paintLyrics(false);
         }
 
-        // The mini progress line is cheap and visible even when the bar is closed.
-        var mini = $('np-prog');
-        if (mini) mini.style.width = ((isFinite(vm.dur) && vm.dur > 0) ? (vm.pos / vm.dur) * 100 : 0) + '%';
+        sty($('np-prog'), 'width',
+            ((isFinite(vm.dur) && vm.dur > 0) ? (vm.pos / vm.dur) * 100 : 0) + '%');
     }
 
     // --- the mini bar + full-screen now playing (created once, re-attached as needed) ---
