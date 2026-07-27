@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @inject DownloadJobService Jobs
 @inject HistoryService History
+@inject IJSRuntime JS
 @implements IAsyncDisposable
 
 <PageTitle>Add music</PageTitle>
@@ -9,12 +10,16 @@
 @* Two distinct steps, and conflating them misleads: this page fetches from YouTube onto
    the SERVER's library. Getting audio onto the phone is a second, separate action on the
    track itself (⋯ → Save to this phone). *@
+@* Adding a link costs nothing — it stores the link, not the audio. That keeps this step
+   instant even for a 200-video playlist, and means nothing is fetched for tracks you
+   never actually listen to. *@
 <div class="dl-intro">
-    Step 1 — fetch a link into your library. The download runs on the server, so you can
-    lock your phone and it keeps going.
+    Paste a link and it lands in your library straight away — the link, not the audio, so
+    it's instant even for a long playlist.
     <br /><br />
-    Step 2 — open <a href="library">Library</a> and use ⋯ → <b>Save to this phone</b> on
-    anything you want offline (or ⬇ on a whole playlist).
+    The tracks then appear below. Tap <b>Download</b> on the ones you actually want: the
+    server fetches the audio and your phone saves its own copy automatically. You can also
+    do this later from <a href="library">Library</a>.
 </div>
 
 <div class="card">
@@ -31,6 +36,19 @@
         <label class="chk"><input type="checkbox" @bind="_wantMp3" /> <span>Audio (MP3)</span></label>
         <label class="chk"><input type="checkbox" @bind="_wantSubs" /> <span>Subtitles</span></label>
     </div>
+
+    @* A ten-hour audiobook at music quality is ~470 MB; as speech it's ~140 MB. On a phone
+       that is the difference between fitting and not, and a narrator sounds the same. *@
+    @if (_wantMp3)
+    {
+        <div class="playlist-opt">
+            <label class="chk">
+                <input type="checkbox" @bind="_wantSpoken" />
+                <span>🎙 <strong>Audiobook / spoken word</strong> — mono, much smaller file
+                    (about a quarter the size). Leave off for music.</span>
+            </label>
+        </div>
+    }
 
     @if (_hasPlaylist && _hasVideo)
     {
@@ -49,12 +67,88 @@
     }
 
     <div class="actions">
-        <button class="btn" @onclick="Enqueue" disabled="@(!CanStart)">Fetch to library</button>
+        <button class="btn" @onclick="AddLinks" disabled="@(!CanStart || _adding)">
+            @(_adding ? "Adding…" : "Add to library")
+        </button>
     </div>
+
+    @if (_addError is not null)
+    {
+        <div class="hint hint-warn" style="margin-top:10px">⚠ @_addError</div>
+    }
+    else if (_addResult is not null)
+    {
+        <div class="hint" style="margin-top:10px">✓ @_addResult</div>
+    }
+
     <div class="hint" style="margin-top:10px">
-        Tip: leave <b>Subtitles</b> on — that's what the karaoke lyrics view reads.
+        Tip: leave <b>Subtitles</b> on — that's what the karaoke lyrics view reads. These
+        choices are remembered per track and used when you download it.
     </div>
 </div>
+
+@* Everything you just added, right here with its Download button and its own progress.
+   Adding, downloading and watching it happen were three different pages before, which
+   made a single action feel like an errand. *@
+@if (_added.Count > 0)
+{
+    <div class="row-between">
+        <div class="eyebrow" style="margin-top:22px">Just added</div>
+        @if (_added.Any(r => r.Pending && Jobs.FetchProgress(r.Id) is null))
+        {
+            <button class="btn-mini" @onclick="DownloadAll">Download all</button>
+        }
+    </div>
+
+    <div class="card">
+        @foreach (var r in _added)
+        {
+            var fetch = Jobs.FetchProgress(r.Id);
+            <div class="trk">
+                <span class="trk-art" style="background:@TrackVisuals.Tint(r.Id)">@TrackVisuals.Mono(r.Title)</span>
+                <span class="trk-main">
+                    <span class="trk-title">@r.Title</span>
+                    <span class="trk-sub">
+                        @if (!r.Pending)
+                        {
+                            <span class="trk-off on">Downloaded</span>
+                        }
+                        else if (fetch is { Active: true })
+                        {
+                            <span class="trk-off busy">@ShortStage(fetch)</span>
+                        }
+                        else if (fetch?.Error is { Length: > 0 } err)
+                        {
+                            <span class="trk-wait">@err</span>
+                        }
+                        else
+                        {
+                            @* No mode text here — these rows carry the tappable chip
+                               instead, and saying it twice crowds the row. *@
+                            <span class="trk-wait">Not downloaded</span>
+                        }
+                    </span>
+                    @if (fetch is { Active: true })
+                    {
+                        @* span, not div: this sits inside .trk-main, which is a span. *@
+                        <span class="bar" style="display:block;margin-top:6px"><span class="fill" style="display:block;width:@fetch.Percent%"></span></span>
+                    }
+                </span>
+                @if (r.Pending && fetch is not { Active: true })
+                {
+                    <button class="mode-chip @(r.SpokenWord ? "on" : "")"
+                            title="@(r.SpokenWord
+                                ? "Audiobook: mono, small file. Tap for music quality."
+                                : "Music quality. Tap for audiobook (about a quarter the size).")"
+                            @onclick="() => ToggleSpoken(r.Id)">@(r.SpokenWord ? "🎙" : "♪")</button>
+                    <button class="trk-get" @onclick="() => Fetch(r.Id)">
+                        @(fetch?.Error is null ? "Download" : "Retry")
+                    </button>
+                }
+            </div>
+        }
+    </div>
+}
 
 @if (_jobs.Count > 0)
 {
@@ -159,6 +253,42 @@
     private string _url = "";
     private bool _wantMp4 = false, _wantMp3 = true, _wantSubs = true;
     private bool _wantPlaylist, _hasPlaylist, _hasVideo, _alreadyDownloaded;
+    private bool _wantSpoken;
+    private bool _adding;
+    private string? _addResult, _addError;
+    private readonly List<DownloadRecord> _added = new();
+
+    /// <summary>
+    /// A short label for a row that is mid-download. The raw stage often IS the video's
+    /// title (see DownloadOneAsync), which is already on the line directly above and long
+    /// enough to push the row past the edge of the card — so anything long collapses to a
+    /// plain word and the percent carries the actual information.
+    /// </summary>
+    private static string ShortStage(DownloadJobService.FetchState f)
+    {
+        var stage = f.Stage is { Length: > 0 and <= 24 } s ? s : "Downloading";
+        return f.Percent > 0 ? $"{stage} · {f.Percent}%" : stage;
+    }
+
+    /// <summary>Start this track's download and tell the phone to keep it once it lands.
+    /// One tap, from the same page that added it.</summary>
+    private async Task Fetch(string id)
+    {
+        if (Jobs.EnqueueFetch(id) is null) return;
+        try { await JS.InvokeVoidAsync("ytdlWantOnDevice", id); } catch { /* no JS yet */ }
+        _jobs = Jobs.All().ToList();
+        EnsurePolling();
+    }
+
+    /// <summary>Flip a not-yet-fetched track between music and audiobook quality.</summary>
+    private Task ToggleSpoken(string id) =>
+        History.UpdateAsync(id, r => r.SpokenWord = !r.SpokenWord);
+
+    private async Task DownloadAll()
+    {
+        foreach (var r in _added.Where(r => r.Pending).ToList())
+            await Fetch(r.Id);
+    }
 
     private List<DownloadJob> _jobs = new();
     private PeriodicTimer? _timer;
@@ -196,14 +326,51 @@
         else if (!_hasVideo) _wantPlaylist = true;
     }
 
-    private void Enqueue()
+    /// <summary>
+    /// Adds the link to the library WITHOUT downloading. One metadata call resolves the
+    /// URL — instant for a video, one listing for a playlist of any size — and each video
+    /// becomes a pending track. The audio is pulled later, per track, from the Library.
+    /// </summary>
+    private async Task AddLinks()
     {
         if (!CanStart) return;
-        Jobs.Enqueue(_url.Trim(), new DownloadOptions(_wantMp4, _wantMp3, _wantSubs, _wantPlaylist));
-        _url = "";
-        RefreshUrlState();
-        _jobs = Jobs.All().ToList();
-        EnsurePolling();
+        _adding = true;
+        _addError = null;
+        _addResult = null;
+        try
+        {
+            var (added, existing, updated) = await Jobs.AddLinksAsync(
+                _url.Trim(), new DownloadOptions(_wantMp4, _wantMp3, _wantSubs, _wantPlaylist, _wantSpoken), CancellationToken.None);
+
+            var fresh = added.Count - updated;
+            _addResult = (fresh, updated, existing) switch
+            {
+                (0, 0, 0) => "Nothing to add for that link.",
+                (0, 0, _) => $"Already downloaded ({existing} track{(existing == 1 ? "" : "s")}) — settings unchanged.",
+                (0, _, _) => $"Already waiting to download — settings updated to {(_wantSpoken ? "audiobook" : "music")}.",
+                (_, 0, 0) => $"Added {fresh} track{(fresh == 1 ? "" : "s")} — download what you want below.",
+                _ => $"Added {fresh}, updated {updated}, skipped {existing} already downloaded.",
+            };
+            if (added.Count > 0)
+            {
+                // Newest first, and keep earlier additions so adding two links in a row
+                // doesn't make the first batch disappear mid-download. Re-adding a link
+                // moves that track back to the top rather than listing it twice.
+                var ids = added.Select(r => r.Id).ToHashSet();
+                _added.RemoveAll(r => ids.Contains(r.Id));
+                _added.InsertRange(0, added);
+                _url = "";
+                RefreshUrlState();
+            }
+        }
+        catch (Exception ex)
+        {
+            _addError = ex.Message;
+        }
+        finally
+        {
+            _adding = false;
+        }
     }
 
     private void ClearFinished()

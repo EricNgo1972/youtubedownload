@@ -3,6 +3,9 @@
 @rendermode InteractiveServer
 @inject HistoryService Store
 @inject UploadService Uploads
+@inject DownloadJobService Jobs
+@inject IJSRuntime JS
+@implements IAsyncDisposable
 
 <PageTitle>Library</PageTitle>
 
@@ -30,9 +33,10 @@
                 <span class="hint">@UploadService.AllowedExtsLabel — from this device</span>
                 <InputFile OnChange="OnUpload" multiple accept="audio/*" class="file-input" />
             </label>
+            @* The only way in to the Add page now that it no longer has a tab of its own. *@
             <a class="add-source" href="download">
                 <span class="add-source-title">↓ From YouTube</span>
-                <span class="hint">paste a link to download its audio</span>
+                <span class="hint">paste a link — download it whenever you want</span>
             </a>
         </div>
         @if (_uploading)
@@ -74,10 +78,14 @@ else
         @foreach (var r in _records)
         {
             var audioIndex = FirstAudioIndex(r);
-            var trackUrl = audioIndex >= 0 ? $"/stream/{r.Id}/{audioIndex}" : null;
+            @* A link-only track is still playable — through the relay, not from disk. *@
+            var trackUrl = audioIndex >= 0 ? $"/stream/{r.Id}/{audioIndex}"
+                         : r.Pending ? $"/preview/{r.Id}"
+                         : null;
             <div class="trk" data-track-url="@trackUrl" data-title="@r.Title"
                  data-artist="@TrackVisuals.Artist(r.Author)"
-                 data-share-id="@r.Id" data-share-title="@r.Title">
+                 data-share-id="@r.Id" data-share-title="@r.Title"
+                 data-pending="@(r.Pending ? "1" : "0")" data-speech="@(r.SpokenWord ? "1" : "0")">
                 <button class="trk-hit" onclick="ytdlPlayer.playEl(this)"
                         data-track-url="@trackUrl" data-title="@r.Title"
                         data-artist="@TrackVisuals.Artist(r.Author)" disabled="@(trackUrl is null)">
@@ -90,7 +98,27 @@ else
                                 <span class="trk-artist">@a</span>
                                 <span class="trk-dot">·</span>
                             }
-                            <span class="trk-off" data-off-for="@trackUrl">…</span>
+                            @if (r.Pending)
+                            {
+                                @* No audio on the server yet — this row holds a link. The
+                                   Cache API marker would be meaningless here, so it says
+                                   what is actually true instead, including how the fetch
+                                   is going: you started it here, so you watch it here. *@
+                                var fetch = Jobs.FetchProgress(r.Id);
+                                if (fetch is { Active: true })
+                                {
+                                    <span class="trk-off busy">@ShortStage(fetch)</span>
+                                }
+                                else
+                                {
+                                    <span class="trk-wait">@PendingLabel(r, fetch)</span>
+                                    <span class="trk-mode">@(r.SpokenWord ? "audiobook" : "music")</span>
+                                }
+                            }
+                            else
+                            {
+                                <span class="trk-off" data-off-for="@trackUrl">…</span>
+                            }
                             @if (LyricsService.Has(r))
                             {
                                 <span class="trk-lrc" title="Lyrics available">LRC</span>
@@ -99,10 +127,24 @@ else
                     </span>
                     <span class="trk-dur">@TrackVisuals.Duration(r.Duration)</span>
                 </button>
+                @if (r.Pending && Jobs.FetchProgress(r.Id) is not { Active: true })
+                {
+                    @* One tap does the whole job: the server pulls the audio, and the
+                       device saves it as soon as it lands (ytdlWantOnDevice below).
+                       Which quality it uses is shown on the row and changed from ⋯ —
+                       an inline toggle as well left the row too crowded to read. *@
+                    <button class="trk-get needs-circuit" @onclick="() => Fetch(r.Id)">
+                        @(Jobs.FetchProgress(r.Id)?.Error is null ? "Download" : "Retry")
+                    </button>
+                }
                 <button class="trk-more" aria-label="More" onclick="ytdlUI.sheet(this)">⋯</button>
 
                 @* Driven by the sheet — see the note in Playlists.razor. *@
                 <span class="row-ops">
+                    @if (r.Pending)
+                    {
+                        <button class="op-speech" @onclick="() => ToggleSpoken(r.Id)"></button>
+                    }
                     @if (_showArchived)
                     {
                         <button class="op-restore" @onclick="() => SetArchived(r.Id, false)"></button>
@@ -153,7 +195,89 @@ else
     // 500 MB per file — generous for long audio, well under a runaway.
     private const long MaxUploadBytes = 500L * 1024 * 1024;
 
+    // Records this page has asked the server to fetch, so their rows can show progress.
+    private readonly HashSet<string> _fetching = new();
+    private PeriodicTimer? _timer;
+    private Task? _pollTask;
+
     protected override void OnInitialized() => Reload();
+
+    /// <summary>Short label for a row mid-download — the raw stage carries the video's own
+    /// title, which is already shown above and long enough to overflow the row.</summary>
+    private static string ShortStage(DownloadJobService.FetchState f)
+    {
+        var stage = f.Stage is { Length: > 0 and <= 24 } s ? s : "Downloading";
+        return f.Percent > 0 ? $"{stage} · {f.Percent}%" : stage;
+    }
+
+    private static string PendingLabel(DownloadRecord r, DownloadJobService.FetchState? fetch) =>
+        (fetch?.Error ?? r.FetchError) is { Length: > 0 } err
+            ? $"Failed: {err}"
+            : "Not downloaded";
+
+    /// <summary>
+    /// Pull this track's audio onto the server, then onto this phone. The two halves are
+    /// deliberately one tap: a track you asked for is one you want to be able to play with
+    /// no signal, and making that a second manual step is how tracks end up half-arrived.
+    /// </summary>
+    /// <summary>Flip a not-yet-fetched track between music and audiobook quality. Only
+    /// meaningful before the download — afterwards the file already exists.</summary>
+    private async Task ToggleSpoken(string id)
+    {
+        await Store.UpdateAsync(id, r => r.SpokenWord = !r.SpokenWord);
+        Reload();
+    }
+
+    private async Task Fetch(string id)
+    {
+        if (Jobs.EnqueueFetch(id) is null) return;
+        _fetching.Add(id);
+
+        // Tell the device to save it the moment the server has it. This is client state
+        // (which phone wants it), so it lives in the browser, not the record.
+        try { await JS.InvokeVoidAsync("ytdlWantOnDevice", id); } catch { /* no JS yet */ }
+        EnsurePolling();
+    }
+
+    // Only runs while something is being fetched, and stops as soon as nothing is.
+    private void EnsurePolling()
+    {
+        if (_pollTask is not null) return;
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        _pollTask = PollLoop();
+    }
+
+    private async Task PollLoop()
+    {
+        try
+        {
+            while (_timer is not null && await _timer.WaitForNextTickAsync())
+            {
+                // A record stops being pending the moment its fetch lands.
+                _fetching.RemoveWhere(id => Store.Get(id) is not { Pending: true });
+                Reload();
+                await InvokeAsync(StateHasChanged);
+                if (_fetching.Count == 0) break;
+            }
+        }
+        catch (OperationCanceledException) { /* page went away */ }
+        finally
+        {
+            _timer?.Dispose();
+            _timer = null;
+            _pollTask = null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _timer?.Dispose();
+        _timer = null;
+        if (_pollTask is not null)
+        {
+            try { await _pollTask; } catch { /* shutting down */ }
+        }
+    }
 
     private void Reload()
     {

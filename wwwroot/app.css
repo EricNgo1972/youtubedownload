@@ -153,6 +153,12 @@ body.no-circuit .head-dot { background: var(--muted); animation: none; }
 .tab-i { font-size: 16px; line-height: 1; }
 .tab-l { font-size: 10.5px; font-weight: 600; letter-spacing: .01em; }
 
+/* The "Playing" tab exists only while something is loaded — player.js puts .has-np on
+   <body> whenever there is a current track. The other two tabs are flex:1, so they simply
+   share the room back when it's hidden. */
+.tab-np { display: none; color: var(--accent); }
+body.has-np .tab-np { display: flex; }
+
 /* ------------------------------------------------------------- controls -- */
 
 .btn {
@@ -246,7 +252,13 @@ body.no-circuit .head-dot { background: var(--muted); animation: none; }
 .trk-dot { font-size: 11px; color: var(--dim-3); }
 /* Filled in from the Cache API — "is this on the phone" is client state. Doubles as the
    progress readout while a single file is being saved. */
-.trk-off { font-size: 11px; font-weight: 600; white-space: nowrap; color: var(--muted); }
+/* nowrap keeps the marker on one line, but a flex item will not shrink below its content
+   unless told to — without min-width:0 a long label (a download stage carries the video's
+   own title) pushes the row wider than the card and puts a scrollbar on the whole page. */
+.trk-off {
+    font-size: 11px; font-weight: 600; white-space: nowrap; color: var(--muted);
+    min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
 .trk-off.on { color: var(--ok); }
 .trk-off.busy { color: var(--accent); animation: mmPulse 1.4s ease-in-out infinite; }
 .trk-dur { font-size: 11.5px; color: var(--dim); font-family: var(--display); flex: 0 0 auto; }
@@ -487,6 +499,8 @@ body.no-circuit .head-dot { background: var(--muted); animation: none; }
 .pick-auth { display: block; font-size: 11.5px; color: var(--muted-2); margin-top: 2px; }
 .src-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; color: var(--muted); border: 1px solid var(--line-2); border-radius: 5px; padding: 2px 5px; flex: 0 0 auto; }
 .src-upload { color: var(--accent); border-color: var(--accent-45); }
+/* A library entry that is still only a link — no audio fetched yet. */
+.src-link { color: var(--dim); border-style: dashed; }
 
 /* --------------------------------------------------------------- misc -- */
 
@@ -498,6 +512,48 @@ body.no-circuit .head-dot { background: var(--muted); animation: none; }
 }
 .offline-banner b { color: var(--text); }
 body.no-circuit .needs-circuit { opacity: .32; pointer-events: none; }
+
+/* A library row whose audio hasn't been fetched yet: it holds a link, nothing more.
+   Sized to match .trk-off — it stands in the same slot, and without nowrap it wraps to a
+   second line and squeezes the artist beside it. */
+.trk-wait {
+    font-size: 11px; font-style: italic; white-space: nowrap; color: var(--dim);
+    min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.trk-get {
+    flex: 0 0 auto; align-self: center;
+    padding: 6px 11px; border-radius: 999px; border: 1px solid var(--accent);
+    background: transparent; color: var(--accent); cursor: pointer;
+    font: inherit; font-size: 11.5px; font-weight: 600; white-space: nowrap;
+}
+.trk-get:disabled { opacity: .5; cursor: default; }
+
+/* Which quality a not-yet-fetched track will be downloaded at — shown next to the button
+   that starts it, because the choice was made on a different page and taking it on trust
+   is how you end up with a 470 MB audiobook. Tapping flips it. */
+.trk-mode { font-size: 10px; letter-spacing: .03em; color: var(--dim-3); white-space: nowrap; }
+.mode-chip {
+    flex: 0 0 auto; align-self: center; margin-right: 6px;
+    width: 30px; height: 30px; border-radius: 999px;
+    border: 1px dashed var(--line-2); background: transparent; color: var(--dim);
+    font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
+}
+.mode-chip.on { border-style: solid; border-color: var(--accent-45); color: var(--accent); }
+/* The button needs the room more than a duration the row can't play yet. */
+.trk:has(.trk-get) .trk-dur { display: none; }
+
+/* Result of a sync with the server. Plain text when it's just news ("Up to date"),
+   and an accented, obviously tappable strip when it's an offer to reload the list. */
+.sync-msg {
+    display: block; width: 100%; text-align: left; cursor: pointer;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 10px 14px; margin-bottom: 12px;
+    font: inherit; font-size: 12px; color: var(--muted); line-height: 1.5;
+}
+.sync-msg.act { border-color: var(--accent); color: var(--text); }
+#btn-sync.spin { color: var(--accent); animation: mmSpin 1s linear infinite; }
+@keyframes mmSpin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #btn-sync.spin { animation: none; } }
 
 .add-track-sources { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
 .add-source { flex: 1; min-width: 150px; display: flex; flex-direction: column; gap: 4px; padding: 14px; border: 1px dashed var(--line-3); border-radius: 13px; cursor: pointer; }

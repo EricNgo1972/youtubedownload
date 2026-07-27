@@ -160,6 +160,16 @@ window.ytdlUI = (function () {
         var host = $('sheet-items');
         host.innerHTML = '';
 
+        // A track that is still only a link: the one thing worth deciding before the
+        // download starts is whether it is speech or music, because that is a 4x
+        // difference in the file it produces — and once it's fetched it's too late.
+        if (row.getAttribute('data-pending') === '1') {
+            var speech = row.getAttribute('data-speech') === '1';
+            proxy(host, row, '.op-speech',
+                speech ? '♪' : '🎙',
+                speech ? 'Download at music quality instead' : 'Download as audiobook (about 4× smaller)');
+        }
+
         if (url) {
             host.appendChild(item('▶', 'Play now', '', function () {
                 close();

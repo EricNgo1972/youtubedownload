@@ -46,7 +46,12 @@
                 @for (var idx = 0; idx < items.Count; idx++)
                 {
                     var it = items[idx];
-                    var trackUrl = it.AudioIndex >= 0 ? $"/stream/{it.RecordId}/{it.AudioIndex}" : null;
+                    @* Downloaded tracks play from disk, link-only tracks through the relay.
+                       The URL must match what /api/playlists reports for this track, or the
+                       sync check sees the page and the server disagreeing forever. *@
+                    var trackUrl = it.AudioIndex >= 0 ? $"/stream/{it.RecordId}/{it.AudioIndex}"
+                                 : it.Pending ? $"/preview/{it.RecordId}"
+                                 : null;
                     <div class="trk" data-track-url="@trackUrl" data-title="@it.Title"
                          data-artist="@Artist(it.Author)" data-list="@pl.Id" data-list-name="@pl.Name">
                         <button class="trk-hit" onclick="ytdlPlayer.tapTrack('@trackUrl', '@pl.Id')"
@@ -60,9 +65,18 @@
                                         <span class="trk-artist">@a</span>
                                         <span class="trk-dot">·</span>
                                     }
-                                    @* Filled in from the Cache API — whether the audio is on
-                                       THIS device is client state the server can't know. *@
-                                    <span class="trk-off" data-off-for="@trackUrl">…</span>
+                                    @if (it.Pending)
+                                    {
+                                        @* Nothing on the server yet — the Cache API marker
+                                           has nothing to report, so say what's true. *@
+                                        <span class="trk-wait">Not downloaded</span>
+                                    }
+                                    else
+                                    {
+                                        @* Filled in from the Cache API — whether the audio is on
+                                           THIS device is client state the server can't know. *@
+                                        <span class="trk-off" data-off-for="@trackUrl">…</span>
+                                    }
                                     @if (it.HasLyrics)
                                     {
                                         <span class="trk-lrc" title="Lyrics available">LRC</span>
@@ -137,7 +151,16 @@
                                 <span class="pick-auth">@rec.Author</span>
                             }
                         </span>
-                        <span class="src-badge src-@rec.Source.ToString().ToLowerInvariant()">@(rec.Source == TrackSource.Upload ? "Upload" : "YouTube")</span>
+                        @* Say which of these are links, so "add now, download later" is a
+                           visible choice rather than a surprise in the playlist. *@
+                        @if (rec.Pending)
+                        {
+                            <span class="src-badge src-link" title="Not downloaded yet — a link">Link</span>
+                        }
+                        else
+                        {
+                            <span class="src-badge src-@rec.Source.ToString().ToLowerInvariant()">@(rec.Source == TrackSource.Upload ? "Upload" : "YouTube")</span>
+                        }
                     </label>
                 }
                 @if (truncated)
@@ -234,7 +257,7 @@
     protected override void OnInitialized() => _playlists = Store.All();
 
     private sealed record Item(string RecordId, string Title, string Author, int AudioIndex,
-                               string RawDuration, bool HasLyrics)
+                               string RawDuration, bool HasLyrics, bool Pending = false)
     {
         public string Duration => TrackVisuals.Duration(RawDuration);
     }
@@ -247,7 +270,8 @@
             var rec = History.Get(rid);
             list.Add(rec is null
                 ? new Item(rid, "(removed from library)", "", -1, "", false)
-                : new Item(rid, rec.Title, rec.Author, FirstAudioIndex(rec), rec.Duration, LyricsService.Has(rec)));
+                : new Item(rid, rec.Title, rec.Author, FirstAudioIndex(rec), rec.Duration,
+                           LyricsService.Has(rec), rec.Pending));
         }
         return list;
     }
@@ -281,8 +305,11 @@
         var inList = pl?.RecordIds.ToHashSet() ?? new HashSet<string>();
         var q = _search.Trim();
 
+        // A track added as a LINK has no audio yet and so no audio index. It must still be
+        // pickable: organising links into playlists first, then downloading what you
+        // actually want, is the whole point of holding links rather than files.
         var matched = History.Active()
-            .Where(r => !inList.Contains(r.Id) && FirstAudioIndex(r) >= 0)
+            .Where(r => !inList.Contains(r.Id) && (FirstAudioIndex(r) >= 0 || r.Pending))
             .Where(r => q.Length == 0
                 || r.Title.Contains(q, StringComparison.OrdinalIgnoreCase)
                 || (r.Author?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
@@ -294,12 +321,23 @@
         return (matched, truncated);
     }
 
+    /// <summary>Tell the device its cached playlist manifest is out of date.
+    /// That copy — not the server — is what the player resolves a track tap against, so
+    /// every edit has to invalidate it. Skipping this left a just-added track unknown to
+    /// the tap handler until the page was reloaded (and an installed PWA has no reload).
+    /// </summary>
+    private async Task NotifyChanged()
+    {
+        try { await JS.InvokeVoidAsync("ytdlPlaylistsChanged"); } catch { /* no JS yet */ }
+    }
+
     private async Task AddSelected()
     {
         if (_addDialogPlaylistId is null || _selected.Count == 0) return;
         await Store.AddItemsAsync(_addDialogPlaylistId, _selected.ToList());
         _playlists = Store.All();
         CloseAddDialog();
+        await NotifyChanged();
     }
 
     private void OpenCreateDialog() { _newName = ""; _showCreate = true; }
@@ -319,6 +357,7 @@
         _playlists = Store.All();
         // Which playlist is expanded is client-side state (so it works without a circuit).
         try { await JS.InvokeVoidAsync("ytdlPl.open", pl.Id); } catch { /* no JS yet */ }
+        await NotifyChanged();
     }
 
     private void OpenRenameDialog(string id)
@@ -345,6 +384,7 @@
         _renameName = "";
         _renameDialogPlaylistId = null;
         _playlists = Store.All();
+        await NotifyChanged();
     }
 
     private void AskDelete(string id) => _deleteDialogPlaylistId = id;
@@ -358,10 +398,22 @@
         await Store.DeleteAsync(id);
         _playlists = Store.All();
         try { await JS.InvokeVoidAsync("ytdlPl.forget", id); } catch { /* no JS yet */ }
+        await NotifyChanged();
     }
 
-    private async Task Remove(string plId, string recordId) { await Store.RemoveItemAsync(plId, recordId); _playlists = Store.All(); }
-    private async Task Move(string plId, string recordId, int delta) { await Store.MoveAsync(plId, recordId, delta); _playlists = Store.All(); }
+    private async Task Remove(string plId, string recordId)
+    {
+        await Store.RemoveItemAsync(plId, recordId);
+        _playlists = Store.All();
+        await NotifyChanged();
+    }
+
+    private async Task Move(string plId, string recordId, int delta)
+    {
+        await Store.MoveAsync(plId, recordId, delta);
+        _playlists = Store.All();
+        await NotifyChanged();
+    }
 
     private static readonly string[] AudioExts = { ".mp3", ".m4a" };
 
