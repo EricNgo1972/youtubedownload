@@ -13,9 +13,10 @@
 //
 // UI STATE RULE: the DOM is a projection of the player's state, never a place state is
 // kept. Everything visible — the marked row, the highlighted playlist card, the bar and
-// its contents, the play glyph — is written by repaint(), which reads the current queue
-// and re-applies it to whatever DOM exists right now. It is idempotent and safe to call
-// at any time, and a MutationObserver calls it after every change to the page.
+// its contents, the play glyph — is written by render() from a single view model (vm),
+// which set() is the only way to change. render() is idempotent, so it can redraw the
+// same frame onto new elements; a MutationObserver does exactly that after every change
+// to the page.
 //
 // This replaces an event-driven scheme that painted the rows once, at the moment the
 // audio started, and never again. It looked correct until a navigation replaced those
@@ -28,14 +29,11 @@
     if (window.ytdlPlayer) return;
 
     var audio, bar, full, elTitle, elArtist, elPlay, elStatus, elArt;
-    var status = '';  // '' | 'loading' | 'ok' | 'error'
+    // Controller state only. Anything the user can SEE lives in vm (below) — keeping a
+    // second copy here is what let the two drift apart in the first place.
     var queue = [];   // live play order (already shuffled when shuffle is on)
     var src = [];     // original unshuffled order, so shuffle can be turned back off
     var idx = -1;
-    var ctx = '';     // context name (playlist) for the lock-screen "album"
-    var ctxId = '';   // …and its id, so the right playlist card lights up
-    var shuffle = localStorage.getItem('ytdl-shuffle') === '1';
-    var repeat = localStorage.getItem('ytdl-repeat') === '1';
     var lastSave = 0;
     var stallTimer = null;   // watchdog for "load started but no audio ever arrived"
     var API_MS = 2500;       // give up on the playlist API this fast, then use local data
@@ -57,6 +55,125 @@
     function posKey(url) { return 'ytdl-pos-' + url; }
     function shuf(a) { for (var k = a.length - 1; k > 0; k--) { var r = Math.floor(Math.random() * (k + 1)); var t = a[k]; a[k] = a[r]; a[r] = t; } return a; }
     function cur() { return (idx >= 0 && queue[idx]) ? queue[idx] : null; }
+
+    // --- view model -------------------------------------------------------------------
+    // Everything the player SHOWS, in one object, with two rules:
+    //   * nothing writes player DOM except render()
+    //   * nothing writes vm except set()
+    // Controller state — the queue, the <audio>, the timers — stays outside it. The view
+    // model is not "the data", it is the description of a frame.
+    //
+    // The point is that a frame can be reproduced at any time from vm alone. That is what
+    // makes the player survive the page changing underneath it: the DOM is disposable, so
+    // when Blazor replaces it we just draw the same frame again onto the new elements.
+    var vm = {
+        url: null, title: '', author: '',   // the selected track
+        ctx: '', ctxId: '',                 // …and where it is being played from
+        playing: false,
+        status: '',                         // '' | 'loading' | 'ok' | 'error'
+        note: '',                           // one line under the title
+        badge: '',                          // "Saved on this phone" / "Streaming — not saved"
+        onDevice: false,
+        barVisible: false,
+        fullOpen: false,
+        tab: localStorage.getItem('ytdl-nptab') === 'lyrics' ? 'lyrics' : 'cover',
+        shuffle: localStorage.getItem('ytdl-shuffle') === '1',
+        repeat: localStorage.getItem('ytdl-repeat') === '1',
+        pos: 0, dur: NaN,
+    };
+
+    /// The only way to change what is displayed. Returns whether anything actually moved,
+    /// so callers can skip work; renders only on a real change.
+    function set(patch) {
+        var dirty = false;
+        for (var k in patch) {
+            if (vm[k] !== patch[k]) { vm[k] = patch[k]; dirty = true; }
+        }
+        if (dirty) render();
+        return dirty;
+    }
+
+    // Which track/context the page-wide marks were last drawn for. Scanning every row is
+    // far too expensive to repeat on each timeupdate (four times a second, over a library
+    // of any size), so that part of the frame is only redrawn when it can have changed.
+    var paintedUrl, paintedCtx, paintedNone = true;
+
+    /// Draw the current frame. `force` redraws the page-wide marks too — used when the
+    /// DOM has been replaced and the elements we last marked no longer exist.
+    function render(force) {
+        // 1. Marks that live on the page's own elements (rows, playlist cards).
+        if (force || paintedNone || vm.url !== paintedUrl || vm.ctxId !== paintedCtx) {
+            document.querySelectorAll('.trk[data-track-url]').forEach(function (el) {
+                el.classList.toggle('playing', !!vm.url && el.getAttribute('data-track-url') === vm.url);
+            });
+            document.querySelectorAll('[data-pl-card]').forEach(function (c) {
+                c.classList.toggle('is-current', !!vm.ctxId && c.getAttribute('data-pl-card') === vm.ctxId);
+            });
+            document.querySelectorAll('[data-shuffle]').forEach(function (b) {
+                var card = b.closest('[data-pl-card]');
+                var mine = !card || (vm.ctx && card.getAttribute('data-pl-card') === vm.ctxId);
+                b.classList.toggle('on', vm.shuffle && !!mine);
+            });
+            // The "Playing" tab is a function of whether a track is selected — never a
+            // flag someone has to remember to clear.
+            document.body.classList.toggle('has-np', !!vm.url);
+            paintedUrl = vm.url; paintedCtx = vm.ctxId; paintedNone = false;
+        }
+
+        // 2. The mini bar.
+        if (bar) bar.classList.toggle('show', vm.barVisible);
+        if (elTitle) {
+            elTitle.textContent = vm.title || '—';
+            elArtist.textContent = vm.author || '';
+            elArt.textContent = mono(vm.title);
+            elArt.style.background = tint(vm.url || '');
+        }
+        if (elStatus) {
+            elStatus.textContent = vm.note;
+            elStatus.classList.toggle('show', !!vm.note);
+        }
+
+        var glyph = vm.playing ? '❙❙' : '▶';
+        var loading = vm.status === 'loading';
+        [elPlay, $('npf-play')].forEach(function (b) {
+            if (!b) return;
+            b.textContent = glyph;
+            b.classList.toggle('loading', loading);
+        });
+
+        // 3. The full-screen player. Only worth drawing while it is open.
+        if (full) full.classList.toggle('show', vm.fullOpen);
+        if (vm.fullOpen && full) {
+            $('npf-from').textContent = vm.ctx ? 'Playing from ' + vm.ctx : 'Playing from library';
+            $('npf-title').textContent = vm.title || '';
+            $('npf-artist').textContent = vm.author || '';
+            var art = $('npf-art');
+            art.textContent = mono(vm.title);
+            art.style.background = tint(vm.url || '');
+            var badge = $('npf-badge');
+            badge.textContent = vm.badge;
+            badge.classList.toggle('on', vm.onDevice);
+
+            var pct = (isFinite(vm.dur) && vm.dur > 0) ? (vm.pos / vm.dur) * 100 : 0;
+            $('npf-fill').style.width = pct + '%';
+            $('npf-pos').textContent = fmt(vm.pos);
+            $('npf-dur').textContent = isFinite(vm.dur) ? fmt(vm.dur) : '—';
+
+            $('npf-repeat').classList.toggle('on', vm.repeat);
+            $('npf-shuffle').classList.toggle('on', vm.shuffle);
+
+            var btn = $('npf-lyrbtn'), box = $('npf-lyrics'), cover = $('npf-art');
+            btn.textContent = vm.tab === 'lyrics' ? 'Cover' : 'Lyrics';
+            btn.classList.toggle('on', vm.tab === 'lyrics');
+            box.hidden = vm.tab !== 'lyrics';
+            cover.hidden = vm.tab === 'lyrics';
+            paintLyrics(false);
+        }
+
+        // The mini progress line is cheap and visible even when the bar is closed.
+        var mini = $('np-prog');
+        if (mini) mini.style.width = ((isFinite(vm.dur) && vm.dur > 0) ? (vm.pos / vm.dur) * 100 : 0) + '%';
+    }
 
     // --- the mini bar + full-screen now playing (created once, re-attached as needed) ---
     // The mini bar mounts into #np-slot so it sits between the scrolling view and the tab
@@ -139,7 +256,7 @@
     // bring in rows that know nothing about what is playing. So after any change we put
     // the player back if needed and re-project the state onto the new DOM.
     //
-    // Debounced, and repaint() only ever writes values it just derived, so the mutations
+    // Debounced, and render() only ever writes values it just derived, so the mutations
     // it causes settle immediately instead of feeding back.
     var healTimer = null;
     function watchMount() {
@@ -151,7 +268,7 @@
     }
     function heal() {
         if (barEl && fullEl && (!document.contains(barEl) || !document.contains(fullEl))) injectBar();
-        repaint();
+        render(true);   // force: the elements we last marked are gone
     }
 
     function $(id) { return document.getElementById(id); }
@@ -169,17 +286,17 @@
         elStatus = barEl.querySelector('#np-status');
         elArt = barEl.querySelector('#np-art');
         full = fullEl;
-        if (audio._ytdlBound) { syncShuffle(); return; }
+        if (audio._ytdlBound) { render(true); return; }
         audio._ytdlBound = true;
 
         audio.addEventListener('ended', function () { forgetPos(); if (repeat) playAt(idx); else next(); });
-        audio.addEventListener('play', function () { setGlyph('❙❙'); emit(true); });
+        audio.addEventListener('play', function () { emit(true); });
         audio.addEventListener('playing', function () { setStatus('ok'); });   // real audio started
-        audio.addEventListener('canplay', function () { if (status === 'loading') setStatus('ok'); });
+        audio.addEventListener('canplay', function () { if (vm.status === 'loading') setStatus('ok'); });
         audio.addEventListener('progress', function () { armStall(); });   // bytes arriving — reset the watchdog
         audio.addEventListener('waiting', function () { setStatus('loading'); armStall(); });   // buffering
         audio.addEventListener('stalled', function () { if (!audio.paused) { setStatus('loading'); armStall(); } });
-        audio.addEventListener('pause', function () { clearStall(); setGlyph('▶'); emit(false); });
+        audio.addEventListener('pause', function () { clearStall(); emit(false); });
         audio.addEventListener('error', function () {
             if (audio.error && audio.error.code === 1) return;   // MEDIA_ERR_ABORTED — a new load replaced it
             fail();
@@ -189,7 +306,7 @@
         audio.addEventListener('durationchange', paintTime);
 
         // In the error state the play buttons become a retry; otherwise play/pause.
-        function onPlayBtn() { if (status === 'error') playAt(idx); else toggle(); }
+        function onPlayBtn() { if (vm.status === 'error') playAt(idx); else toggle(); }
         elPlay.addEventListener('click', onPlayBtn);
         $('npf-play').addEventListener('click', onPlayBtn);
         $('np-next').addEventListener('click', next);
@@ -199,30 +316,25 @@
         $('npf-close').addEventListener('click', closeFull);
         $('npf-shuffle').addEventListener('click', function () { setShuffle(!shuffle); });
         $('npf-repeat').addEventListener('click', function () {
-            repeat = !repeat;
-            localStorage.setItem('ytdl-repeat', repeat ? '1' : '0');
-            $('npf-repeat').classList.toggle('on', repeat);
+            set({ repeat: !vm.repeat });
+            localStorage.setItem('ytdl-repeat', vm.repeat ? '1' : '0');
         });
         $('npf-seek').addEventListener('click', seekFromEvent);
-        $('npf-lyrbtn').addEventListener('click', function () { setTab(tab === 'lyrics' ? 'cover' : 'lyrics'); });
-        $('npf-repeat').classList.toggle('on', repeat);
-        // Apply the remembered Cover/Lyrics choice. Without this the markup says "Lyrics"
-        // while the state says lyrics, so the first tap toggles the wrong way.
-        setTab(tab);
+        $('npf-lyrbtn').addEventListener('click', function () { setTab(vm.tab === 'lyrics' ? 'cover' : 'lyrics'); });
+        // The remembered Cover/Lyrics choice is already in vm; render() applies it.
         // Reading ahead by hand should pause the auto-scroll, not fight it. Keyed off
         // real input events rather than 'scroll', because our own smooth scrolling emits
         // scroll events too and would otherwise permanently suppress itself.
         ['wheel', 'touchmove', 'pointerdown'].forEach(function (ev) {
             $('npf-lyrics').addEventListener(ev, function () { userScrolledAt = Date.now(); }, { passive: true });
         });
-        syncShuffle();   // syncs the [data-shuffle] buttons on the page too
+        render(true);
     }
 
     // --- lyrics / karaoke -----------------------------------------------------------
     // Lines come from the subtitle file downloaded with the track (see LyricsService),
     // so there is no third-party lyrics service and nothing to fetch on a plane. The
     // active line wipes left-to-right in the accent colour as it is sung/spoken.
-    var tab = localStorage.getItem('ytdl-nptab') === 'lyrics' ? 'lyrics' : 'cover';
     var lyrics = [];      // [{t, text}] for the current track
     var lyrEls = [];      // one element per line
     var lyrUrl = '';      // which track the loaded lines belong to
@@ -236,14 +348,8 @@
     function recordId(url) { var m = /\/stream\/([^/]+)/.exec(url || ''); return m ? m[1] : null; }
 
     function setTab(t) {
-        tab = t;
+        set({ tab: t });
         localStorage.setItem('ytdl-nptab', t);
-        var btn = $('npf-lyrbtn'), box = $('npf-lyrics'), art = $('npf-art');
-        if (!btn) return;
-        btn.textContent = t === 'lyrics' ? 'Cover' : 'Lyrics';
-        btn.classList.toggle('on', t === 'lyrics');
-        if (box) box.hidden = t !== 'lyrics';
-        if (art) art.hidden = t === 'lyrics';
         if (t === 'lyrics') { loadLyrics(cur()); scrollToActive(true); }
     }
 
@@ -364,7 +470,7 @@
     }
 
     function paintLyrics(force) {
-        if (!lyrics.length || tab !== 'lyrics' || !audio) return;
+        if (!lyrics.length || vm.tab !== 'lyrics' || !audio) return;
         var pos = audio.currentTime || 0;
         var i = activeIndex(pos);
         if (i !== lyrActive) {
@@ -385,36 +491,22 @@
 
     function scrollToActive(force) {
         var box = $('npf-lyrics'), el = lyrEls[lyrActive];
-        if (!box || !el || tab !== 'lyrics') return;
+        if (!box || !el || vm.tab !== 'lyrics') return;
         // Leave manual scrolling alone for a few seconds so reading ahead isn't yanked back.
         if (!force && Date.now() - userScrolledAt < 4000) return;
         var top = el.offsetTop - box.clientHeight / 2 + el.offsetHeight / 2;
         box.scrollTo({ top: Math.max(0, top), behavior: force ? 'auto' : 'smooth' });
     }
 
-    function setGlyph(g) {
-        if (elPlay) elPlay.textContent = g;
-        var p = $('npf-play'); if (p) p.textContent = g;
-        if (g === '▶' && elPlay) { elPlay.classList.remove('loading'); if (p) p.classList.remove('loading'); }
-    }
-
     // --- full-screen player -------------------------------------------------------
-    function openFull() { if (!cur()) return; full.classList.add('show'); paintFull(); }
+    function openFull() {
+        if (!vm.url) return;
+        set({ fullOpen: true });
+        if (vm.tab === 'lyrics' && lyrUrl !== vm.url) loadLyrics(cur());
+    }
     // Coming out of the full player, the bar reappears for its 10 seconds — a reminder
     // of what is still playing, then gone again.
-    function closeFull() { full.classList.remove('show'); showBar(); }
-
-    function paintFull() {
-        var t = cur(); if (!t || !full) return;
-        $('npf-from').textContent = ctx ? 'Playing from ' + ctx : 'Playing from library';
-        $('npf-title').textContent = t.title || '';
-        $('npf-artist').textContent = t.author || '';
-        var art = $('npf-art');
-        art.textContent = mono(t.title);
-        art.style.background = tint(t.url);
-        if (tab === 'lyrics' && lyrUrl !== t.url) loadLyrics(t);   // new track: new words
-        paintTime();
-    }
+    function closeFull() { set({ fullOpen: false }); showBar(); }
 
     function fmt(s) {
         if (!isFinite(s) || s < 0) return '0:00';
@@ -424,16 +516,10 @@
         return h + ':' + ((m % 60) < 10 ? '0' : '') + (m % 60) + ':' + (r < 10 ? '0' : '') + r;
     }
 
+    // Position is state like anything else; render() decides what to do with it.
     function paintTime() {
         if (!audio) return;
-        var d = audio.duration, pos = audio.currentTime || 0;
-        var pct = (isFinite(d) && d > 0) ? (pos / d) * 100 : 0;
-        var mini = $('np-prog'); if (mini) mini.style.width = pct + '%';
-        if (!full || !full.classList.contains('show')) return;
-        $('npf-fill').style.width = pct + '%';
-        $('npf-pos').textContent = fmt(pos);
-        $('npf-dur').textContent = isFinite(d) ? fmt(d) : '—';
-        paintLyrics(false);
+        set({ pos: audio.currentTime || 0, dur: audio.duration });
     }
 
     function seekFromEvent(e) {
@@ -473,58 +559,28 @@
     var barTimer = null;
 
     function showBar() {
-        if (!bar) return;
-        bar.classList.add('show');
         clearTimeout(barTimer);
-        barTimer = setTimeout(function () { if (bar) bar.classList.remove('show'); }, BAR_MS);
+        set({ barVisible: true });
+        barTimer = setTimeout(function () { set({ barVisible: false }); }, BAR_MS);
     }
     function hideBar() {
         clearTimeout(barTimer);
-        if (bar) bar.classList.remove('show');
-    }
-
-    /// Write the whole of the current playback state onto whatever DOM is present.
-    /// Idempotent and cheap; call it whenever either side might have changed.
-    function repaint() {
-        var t = cur();
-        var url = t ? t.url : null;
-
-        // Rows and playlist cards on the page as it is NOW — after a re-render these are
-        // different elements from the ones that were marked when playback started.
-        document.querySelectorAll('.trk[data-track-url]').forEach(function (el) {
-            el.classList.toggle('playing', !!url && el.getAttribute('data-track-url') === url);
-        });
-        markCurrentCard();
-
-        // Independent of the bar's own visibility: this is what keeps the "Playing" tab
-        // available after the bar has slipped away.
-        document.body.classList.toggle('has-np', !!t);
-
-        if (t && elTitle) {
-            elTitle.textContent = t.title || '—';
-            elArtist.textContent = t.author || '';
-            elArt.textContent = mono(t.title);
-            elArt.style.background = tint(t.url);
-        }
-        // Don't touch the glyph mid-load: setGlyph('▶') also clears the spinner, which
-        // would make a track that is still buffering look idle.
-        if (status !== 'loading') setGlyph(audio && !audio.paused ? '❙❙' : '▶');
-        syncShuffle();
+        set({ barVisible: false });
     }
 
     function emit(playing) {
-        var t = cur();
-        if (t) showBar(); else hideBar();
-        repaint();
-        document.dispatchEvent(new CustomEvent('ytdl:playing', { detail: { url: t ? t.url : null, playing: playing } }));
+        if (vm.url) showBar(); else hideBar();
+        set({ playing: playing });
+        document.dispatchEvent(new CustomEvent('ytdl:playing',
+            { detail: { url: vm.url, playing: playing } }));
     }
 
     function play(tracks, start, name) {
         if (!tracks || !tracks.length) return;
         start = start || 0;
-        ctx = name || '';
+        set({ ctx: name || '' });
         src = tracks.slice();
-        if (shuffle) {
+        if (vm.shuffle) {
             var rest = tracks.map(function (_, i) { return i; }).filter(function (i) { return i !== start; });
             shuf(rest);
             queue = [start].concat(rest).map(function (i) { return tracks[i]; });
@@ -545,14 +601,15 @@
         gen++;
         var t = queue[i];
         showBar();
+        set({ url: t.url, title: t.title || '', author: t.author || '',
+              note: '', badge: '', onDevice: false, pos: 0, dur: NaN });
         setStatus('loading');
         // Project the new selection NOW — marked row, bar contents, and the "Playing"
         // tab — rather than waiting for the audio to fire 'play'. A track that is slow to
         // start, or never starts at all, is still the one the user picked; leaving the UI
         // on the previous track until playback happens to begin is how the two drift.
-        repaint();
         markSource(t, gen);
-        paintFull();
+        if (vm.tab === 'lyrics') loadLyrics(t);
         audio.src = t.url;
         var p = audio.play();
         // Surface real failures (network down, missing/unplayable file) instead of a frozen UI.
@@ -585,10 +642,10 @@
     function clearStall() { if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; } }
     function armStall() {
         clearStall();
-        if (status !== 'loading') return;
+        if (vm.status !== 'loading') return;
         var myGen = gen;
         stallTimer = setTimeout(function () {
-            if (myGen === gen && status === 'loading') fail();
+            if (myGen === gen && vm.status === 'loading') fail();
         }, STALL_MS);
     }
 
@@ -628,32 +685,21 @@
     }
     function pathOf(u) { try { return new URL(u, location.origin).pathname; } catch (e) { return u; } }
 
-    // Loading spinner on the play button / visible error line, so a buffering or failed
-    // track never looks like a frozen UI.
+    // Both of these are now just state changes: the spinner, the glyph and the message
+    // line are all drawn by render() from vm.status and vm.note.
     function setStatus(s, msg) {
-        status = s;
         if (s !== 'loading') clearStall();
-        if (!elPlay) return;
-        elPlay.classList.toggle('loading', s === 'loading');
-        var pf = $('npf-play'); if (pf) pf.classList.toggle('loading', s === 'loading');
-        if (s === 'error') {
-            setGlyph('▶');
-            note(msg || '⚠ Couldn’t play this track — tap ▶ to retry.');
-        } else if (noteGen !== gen) {            // keep a note attached to THIS track
-            elStatus.classList.remove('show');
-            elStatus.textContent = '';
-        }
+        set({
+            status: s,
+            // An error always says why. Any other transition clears a note that belonged
+            // to this track; playAt() has already cleared it when the track changed.
+            note: s === 'error' ? (msg || '⚠ Couldn’t play this track — tap ▶ to retry.') : vm.note,
+        });
+        if (s === 'error') set({ playing: false });
     }
 
-    // One-line message under the title (errors, "skipped N tracks", …). It survives the
-    // track's own status changes so a skip notice doesn't vanish the instant audio starts.
-    var noteGen = -1;
-    function note(msg) {
-        if (!elStatus) return;
-        noteGen = gen;
-        elStatus.textContent = msg;
-        elStatus.classList.add('show');
-    }
+    /// One-line message under the title (errors, "skipped N tracks", …).
+    function note(msg) { set({ note: msg }); }
 
     function next() { if (idx + 1 < queue.length) playAt(idx + 1); }
     function prev() {
@@ -663,7 +709,7 @@
     function toggle() { if (!audio) return; if (audio.paused) audio.play().catch(function () { }); else audio.pause(); }
 
     function setShuffle(on) {
-        shuffle = on;
+        set({ shuffle: on });
         localStorage.setItem('ytdl-shuffle', on ? '1' : '0');
         if (idx >= 0 && queue.length) {
             var curUrl = queue[idx].url;
@@ -675,21 +721,12 @@
                 if (ci >= 0) { queue = src.slice(); idx = ci; }
             }
         }
-        syncShuffle();
-    }
-    function syncShuffle() {
-        var s = $('npf-shuffle'); if (s) s.classList.toggle('on', shuffle);
-        // A playlist's ⤮ lights up only while that playlist is the one playing.
-        document.querySelectorAll('[data-shuffle]').forEach(function (b) {
-            var card = b.closest('[data-pl-card]');
-            var mine = !card || (ctx && card.getAttribute('data-pl-card') === ctxId);
-            b.classList.toggle('on', shuffle && !!mine);
-        });
+        render(true);   // the [data-shuffle] buttons live on the page, not in the bar
     }
 
     function setSession(t) {
         if (!('mediaSession' in navigator)) return;
-        navigator.mediaSession.metadata = new MediaMetadata({ title: t.title || '', artist: t.author || '', album: ctx });
+        navigator.mediaSession.metadata = new MediaMetadata({ title: t.title || '', artist: t.author || '', album: vm.ctx });
         navigator.mediaSession.setActionHandler('play', function () { audio.play(); });
         navigator.mediaSession.setActionHandler('pause', function () { audio.pause(); });
         navigator.mediaSession.setActionHandler('nexttrack', next);
@@ -699,16 +736,8 @@
     // Start a resolved playlist ({id, name, tracks}) at `atUrl` (or the top).
     function start(pl, atUrl) {
         var i = atUrl ? pl.tracks.findIndex(function (t) { return t.url === atUrl; }) : 0;
-        ctxId = pl.id || '';
+        set({ ctxId: pl.id || '' });
         play(pl.tracks, i < 0 ? 0 : i, pl.name);
-        markCurrentCard();
-    }
-
-    // Highlight the playlist card that's playing.
-    function markCurrentCard() {
-        document.querySelectorAll('[data-pl-card]').forEach(function (c) {
-            c.classList.toggle('is-current', !!ctxId && c.getAttribute('data-pl-card') === ctxId);
-        });
     }
 
     // Which locally-known track list to play from. BOTH sources are pure device reads
@@ -740,7 +769,7 @@
         var sel = '.trk[data-track-url="' + (window.CSS && CSS.escape ? CSS.escape(url) : url) + '"]';
         var row = document.querySelector(sel);
         if (!row) return false;
-        ctxId = '';
+        set({ ctxId: '' });
         play([{ url: url, title: row.getAttribute('data-title'), author: row.getAttribute('data-artist') }],
              0, row.getAttribute('data-list-name') || '');
         return true;
@@ -761,9 +790,9 @@
     }
     function forgetPos() { var t = cur(); if (t) localStorage.removeItem(posKey(t.url)); }
 
-    // Row highlighting is repaint()'s job now — it has to survive re-renders, and an
-    // event only reaches the rows that happen to exist when it fires. The event is kept
-    // for anything else that wants to know playback changed.
+    // Row highlighting is render()'s job — it has to survive re-renders, and an event
+    // only reaches the rows that happen to exist at the moment it fires. The ytdl:playing
+    // event is kept for anything else that wants to know playback changed.
 
     window.ytdlPlayer = {
         play: play,
@@ -822,16 +851,14 @@
         shufflePlaylist: function (id) {
             var pl = resolve(id);
             if (!pl) { this.playFromApi(id); return; }
-            shuffle = true;
+            set({ shuffle: true, ctxId: pl.id || id });
             localStorage.setItem('ytdl-shuffle', '1');
-            ctxId = pl.id || id;
             play(pl.tracks, Math.floor(Math.random() * pl.tracks.length), pl.name);
-            markCurrentCard();
         },
         openFull: openFull,
         toggle: toggle, next: next, prev: prev,
-        setShuffle: setShuffle, toggleShuffle: function () { setShuffle(!shuffle); },
-        isShuffle: function () { return shuffle; },
+        setShuffle: setShuffle, toggleShuffle: function () { setShuffle(!vm.shuffle); },
+        isShuffle: function () { return vm.shuffle; },
         current: function () { var t = cur(); return t ? t.url : null; },
         isPlaying: function () { return !!(audio && !audio.paused); }
     };
