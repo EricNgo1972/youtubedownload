@@ -17,8 +17,23 @@
 // no link: plain fetch() has no timeout, so without deadlines the app sits waiting on
 // requests the network will never answer.
 
-const VERSION = 'v41';
-const SHELL = `ytdl-shell-${VERSION}`;
+// The build token this worker was registered with (/sw.js?v=abc123). Appending it to the
+// precache URLs defeats any CDN in front of the app: the edge has never seen these exact
+// URLs for a new build, so it cannot hand back a previous deploy's files.
+const BUILD = new URL(self.location.href).searchParams.get('v') || '';
+const versioned = (u) => (BUILD ? u + '?v=' + BUILD : u);
+
+// The shell cache is named after the BUILD, not a hand-maintained constant, so every
+// deploy gets a clean one and activate() bins the previous.
+//
+// This has to be per-build. Precached entries carry ?v=<build> while cacheFirst() looks
+// them up with ignoreSearch:true — so a cache reused across builds ends up holding both
+// /player.js?v=old and /player.js?v=new, and Cache.match returns the FIRST, i.e. the old
+// one. An installed PWA would then keep running the previous deploy's JavaScript with no
+// way for the user to break out short of deleting and re-adding the app. VERSION remains
+// only as the fallback for a worker somehow loaded without a token.
+const VERSION = 'v42';
+const SHELL = `ytdl-shell-${BUILD || VERSION}`;
 const PAGE = 'ytdl-page';             // unversioned: last-good HTML survives shell upgrades
 const MEDIA = 'ytdl-media';           // unversioned: saved audio survives shell upgrades
 const CHUNKS = 'ytdl-chunks';         // pieces of large files, plus their metadata
@@ -64,18 +79,12 @@ const SHELL_ASSETS = [
   '/fonts/ibm-plex-sans-600-vietnamese.woff2',
 ];
 
-// The build token this worker was registered with (/sw.js?v=abc123). Appending it to the
-// precache URLs defeats any CDN in front of the app: the edge has never seen these exact
-// URLs for a new build, so it cannot hand back a previous deploy's files.
-const BUILD = new URL(self.location.href).searchParams.get('v') || '';
-const versioned = (u) => (BUILD ? u + '?v=' + BUILD : u);
-
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(SHELL)
       // cache:'reload' is essential, not a nicety. A plain addAll() is allowed to satisfy
-      // itself from the browser's HTTP cache, so bumping VERSION would build a brand-new
-      // shell out of STALE files — the app would look updated while still running old
+      // itself from the browser's HTTP cache, so a new build would fill its brand-new
+      // shell cache with STALE files — the app would look updated while still running old
       // code, and no amount of restarting would fix it. This forces the network.
       .then((c) => c.addAll(SHELL_ASSETS.map((u) => new Request(versioned(u), { cache: 'reload' }))))
       .then(() => self.skipWaiting())
@@ -102,6 +111,7 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
 
   if (isMedia(url)) { event.respondWith(serveMedia(request)); return; }
+  if (url.pathname.startsWith('/preview/')) { event.respondWith(servePreview(request)); return; }
   if (isShell(url)) { event.respondWith(cacheFirst(request, SHELL)); return; }
   if (url.pathname === API_PATH) { event.respondWith(serveApi(request)); return; }
   // Lyrics are immutable for a given track, so cache-first: instant, and available with
@@ -187,6 +197,18 @@ async function serveBlazor(request) {
   }
 }
 
+// A track that is only a link, relayed from YouTube by the server. NEVER cached — there
+// is nothing durable here, and caching a signed upstream URL would be caching something
+// already expiring. Still time-boxed, so with no signal it fails fast and the player can
+// skip to a track that IS on the device, rather than hanging on a dead request.
+//
+// The deadline covers reaching the server, not the listening: fetch() settles when the
+// response headers arrive, which clears the timer and lets the body stream on freely.
+async function servePreview(request) {
+  try { return await fetchWithin(request, MEDIA_MS); }
+  catch (e) { return new Response('This track is a link — it needs a connection', { status: 504 }); }
+}
+
 // --- chunked media ----------------------------------------------------------------
 // A several-hundred-MB audiobook is stored as ~8 MB pieces so its download can survive a
 // dropped connection (see offline-store.js). Playback must not know or care: we answer
@@ -194,8 +216,23 @@ async function serveBlazor(request) {
 // multi-part Blob construction are both lazy, so a 64 KB seek reads 64 KB — never the
 // whole book. Key shapes are duplicated from offline-store.js because a service worker
 // cannot import the page's modules.
-const chunkKey = (url, i) => `/__chunk__?u=${encodeURIComponent(url)}&i=${i}`;
-const metaKey = (url) => `/__chunkmeta__?u=${encodeURIComponent(url)}`;
+//
+// Keyed by PATHNAME, not by the URL as given. The page saves relative track URLs
+// ("/stream/id/0") while a fetch handler only ever sees the absolute request URL, so
+// keying on the raw string had the two sides writing and reading different keys — every
+// chunked file downloaded fine, reported itself as saved, and then fell through to the
+// network at playback. Audiobooks are the only files big enough to be chunked, which is
+// why songs were unaffected.
+const idOf = (u) => { try { return new URL(u, self.location.origin).pathname; } catch (e) { return u; } };
+const chunkKey = (url, i) => `/__chunk__?u=${encodeURIComponent(idOf(url))}&i=${i}`;
+const metaKey = (url) => `/__chunkmeta__?u=${encodeURIComponent(idOf(url))}`;
+
+// The most we will assemble for a single response. iOS asks for "bytes=0-" as its second
+// request, i.e. the entire remaining file; answering that literally would stitch every
+// piece of a 200 MB book together for one read. A 206 is allowed to return less than was
+// asked for — the media element simply requests the next window — so this keeps each
+// response to at most two pieces no matter how big the file is.
+const MAX_SPAN = 8 * 1048576;
 
 async function serveFromChunks(request) {
   let cache, meta;
@@ -218,6 +255,7 @@ async function serveFromChunks(request) {
   if (start >= size || start > end) {
     return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } });
   }
+  if (range) end = Math.min(end, start + MAX_SPAN - 1);
 
   const parts = [];
   for (let i = Math.floor(start / cs); i <= Math.floor(end / cs); i++) {

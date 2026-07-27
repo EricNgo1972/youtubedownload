@@ -21,9 +21,14 @@ window.ytdlOffline = (function () {
     var CHUNK = 8 * 1048576;           // 8 MB: ~63 pieces for a 500 MB book
     var CHUNK_MIN = 12 * 1048576;      // below this, chunking is pure overhead
 
-    // Keys are internal to this app — they only ever have to be unique and stable.
-    function chunkKey(url, i) { return '/__chunk__?u=' + encodeURIComponent(url) + '&i=' + i; }
-    function metaKey(url) { return '/__chunkmeta__?u=' + encodeURIComponent(url); }
+    // Keys are internal to this app, but they are read from TWO places that see a URL
+    // differently: this page holds relative track URLs ("/stream/id/0") while the service
+    // worker only ever sees the absolute request URL. Both sides must therefore key off
+    // the same canonical form — the pathname — or the worker looks up a key that was
+    // never written and every chunked file silently falls through to the network.
+    function idOf(u) { try { return new URL(u, location.origin).pathname; } catch (e) { return u; } }
+    function chunkKey(url, i) { return '/__chunk__?u=' + encodeURIComponent(idOf(url)) + '&i=' + i; }
+    function metaKey(url) { return '/__chunkmeta__?u=' + encodeURIComponent(idOf(url)); }
 
     async function readMeta(url) {
         try {
@@ -154,23 +159,29 @@ window.ytdlOffline = (function () {
         return info.size;
     }
 
-    /// Save one track's audio to this device. Large files are chunked (and resumable);
-    /// small ones are stored whole, where the extra bookkeeping would just be overhead.
-    async function saveTrack(track, onProgress) {
-        await ensurePersisted();
-        var url = track.url, bytes;
-
+    /// Store one URL's audio the right way round: large files in resumable chunks, small
+    /// ones whole, where the extra bookkeeping would just be overhead. Used by BOTH the
+    /// per-track ⤓ and the playlist ⬇ — a playlist of audiobooks must not be the one path
+    /// that downloads several hundred MB with no way to resume it.
+    async function saveAudio(url, onProgress) {
         var info = await probe(url);
         if (info && info.size >= CHUNK_MIN) {
             // Drop any whole-file copy so the two storage modes can't both claim this URL.
             try { await (await caches.open(CACHE)).delete(url); } catch (e) { }
-            bytes = await saveChunked(url, info, onProgress);
-        } else {
-            bytes = await cacheInto(url, onProgress);
-            // …and the reverse: a stale chunk manifest would keep reporting a partial
-            // download for a file that is now stored whole.
-            await dropChunks(url);
+            return await saveChunked(url, info, onProgress);
         }
+        var bytes = await cacheInto(url, onProgress);
+        // …and the reverse: a stale chunk manifest would keep reporting a partial
+        // download for a file that is now stored whole.
+        await dropChunks(url);
+        return bytes;
+    }
+
+    /// Save one track's audio to this device, and record the per-track claim on it.
+    async function saveTrack(track, onProgress) {
+        await ensurePersisted();
+        var url = track.url;
+        var bytes = await saveAudio(url, onProgress);
 
         await saveLyrics(url);
 
@@ -397,8 +408,13 @@ window.ytdlOffline = (function () {
     }
 
     // Cache one URL's audio without recording a per-track claim (used by playlist
-    // downloads, where the playlist record is the claim).
-    function saveBytes(url, onProgress) { return cacheInto(url, onProgress); }
+    // downloads, where the playlist record is the claim). Its lyrics come along too, for
+    // the same reason they do on a per-track save.
+    async function saveBytes(url, onProgress) {
+        var bytes = await saveAudio(url, onProgress);
+        await saveLyrics(url);
+        return bytes;
+    }
 
     async function remove(id) {
         var all = load(), pl = all[id];
