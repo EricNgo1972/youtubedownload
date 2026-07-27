@@ -17,7 +17,7 @@
 // no link: plain fetch() has no timeout, so without deadlines the app sits waiting on
 // requests the network will never answer.
 
-const VERSION = 'v40';
+const VERSION = 'v41';
 const SHELL = `ytdl-shell-${VERSION}`;
 const PAGE = 'ytdl-page';             // unversioned: last-good HTML survives shell upgrades
 const MEDIA = 'ytdl-media';           // unversioned: saved audio survives shell upgrades

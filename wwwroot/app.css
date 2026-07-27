@@ -44,7 +44,14 @@
     --display: 'Space Grotesk', system-ui, sans-serif;
     --body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 
+    /* Display cutouts. The page is viewport-fit=cover and, when installed to the home
+       screen, draws under a translucent status bar — so every edge that holds a control
+       has to reserve its inset or the Dynamic Island and home indicator sit on top of
+       the UI. Sides matter in landscape and on rounded corners. */
+    --safe-t: env(safe-area-inset-top, 0px);
     --safe-b: env(safe-area-inset-bottom, 0px);
+    --safe-l: env(safe-area-inset-left, 0px);
+    --safe-r: env(safe-area-inset-right, 0px);
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -71,13 +78,22 @@ input, button, textarea { font-family: inherit; }
 .app {
     position: relative;
     width: 100%; max-width: 440px; margin: 0 auto;
-    height: 100dvh; display: flex; flex-direction: column;
+    /* 100vh first as a fallback; dvh tracks Safari's collapsing toolbar so the tab bar
+       isn't pushed under the browser chrome as you scroll. */
+    height: 100vh;
+    height: 100dvh;
+    display: flex; flex-direction: column;
     background: var(--surface);
     border-left: 1px solid var(--line); border-right: 1px solid var(--line);
     overflow: hidden;
 }
 
-.app-head { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; }
+/* Insets go on the inner rows rather than .app, so panel backgrounds still bleed to the
+   screen edge while their contents stay clear of the cutouts. */
+.app-head {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+    padding: calc(14px + var(--safe-t)) max(16px, var(--safe-r)) 10px max(16px, var(--safe-l));
+}
 .logo {
     width: 30px; height: 30px; border-radius: 9px; flex: 0 0 auto;
     background: var(--accent); color: var(--on-accent);
@@ -98,16 +114,24 @@ body.no-circuit .head-dot { background: var(--muted); animation: none; }
 .icon-btn:hover { color: var(--text); }
 .icon-btn.on { background: var(--accent-10); color: var(--accent); }
 
-.search-wrap { flex: 0 0 auto; padding: 0 16px 10px; }
+.search-wrap { flex: 0 0 auto; padding: 0 max(16px, var(--safe-r)) 10px max(16px, var(--safe-l)); }
 .search-input, .text-input {
     width: 100%; height: 44px; padding: 0 14px;
     background: var(--card-2); border: 1px solid var(--line-2); border-radius: 12px;
-    color: var(--text); font-size: 15px; outline: 0;
+    color: var(--text); outline: 0;
+    /* 16px exactly: iOS Safari zooms the whole page when a focused input is smaller,
+       and the layout never zooms back out. */
+    font-size: 16px;
 }
 .search-input:focus, .text-input:focus { border-color: var(--accent-45); }
 .search-input::placeholder, .text-input::placeholder { color: var(--dim); }
 
-.app-main { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 4px 12px 18px; }
+.app-main {
+    flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    /* Keep rubber-banding inside the list instead of dragging the whole app around. */
+    overscroll-behavior: contain;
+    padding: 4px max(12px, var(--safe-r)) 18px max(12px, var(--safe-l));
+}
 .app-main h1 { font-family: var(--display); font-size: 19px; font-weight: 700; letter-spacing: -.01em; margin: 6px 2px 12px; }
 .app-main h2, .subhead { font-family: var(--display); font-size: 15px; font-weight: 700; margin: 20px 2px 10px; }
 
@@ -116,7 +140,7 @@ body.no-circuit .head-dot { background: var(--muted); animation: none; }
 .tabbar {
     flex: 0 0 auto; display: flex; gap: 2px;
     border-top: 1px solid var(--line); background: var(--nav);
-    padding: 6px 6px calc(10px + var(--safe-b));
+    padding: 6px max(6px, var(--safe-r)) calc(10px + var(--safe-b)) max(6px, var(--safe-l));
 }
 .tab {
     flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
@@ -250,7 +274,7 @@ body.no-circuit .head-dot { background: var(--muted); animation: none; }
 /* --------------------------------------------------------- mini player -- */
 
 #np-slot { flex: 0 0 auto; }
-.np-bar { display: none; margin: 0 10px 6px; border-radius: 14px; background: var(--elev); border: 1px solid var(--line); overflow: hidden; }
+.np-bar { display: none; margin: 0 max(10px, var(--safe-r)) 6px max(10px, var(--safe-l)); border-radius: 14px; background: var(--elev); border: 1px solid var(--line); overflow: hidden; }
 .np-bar.show { display: block; }
 .np-prog { height: 2px; background: rgba(255, 255, 255, .08); }
 .np-prog-fill { height: 100%; width: 0; background: var(--accent); }
@@ -280,7 +304,8 @@ body.no-circuit .head-dot { background: var(--muted); animation: none; }
 
 .np-full {
     position: absolute; inset: 0; z-index: 60; display: none;
-    flex-direction: column; padding: 16px 20px calc(22px + var(--safe-b));
+    flex-direction: column;
+    padding: calc(16px + var(--safe-t)) max(20px, var(--safe-r)) calc(22px + var(--safe-b)) max(20px, var(--safe-l));
     background: var(--surface);
 }
 .np-full.show { display: flex; animation: mmUp .24s cubic-bezier(.2, .8, .2, 1); }
@@ -389,7 +414,7 @@ body.no-circuit .head-dot { background: var(--muted); animation: none; }
     width: 100%; max-height: 78%; overflow-y: auto;
     background: var(--card-2); border-top: 1px solid var(--line-2);
     border-top-left-radius: 20px; border-top-right-radius: 20px;
-    padding: 14px 12px calc(18px + var(--safe-b));
+    padding: 14px max(12px, var(--safe-r)) calc(18px + var(--safe-b)) max(12px, var(--safe-l));
     animation: mmSheet .22s cubic-bezier(.2, .8, .2, 1);
 }
 .sheet-grip { width: 38px; height: 4px; border-radius: 999px; background: var(--line-3); margin: 0 auto 12px; }
@@ -442,10 +467,12 @@ body.no-circuit .head-dot { background: var(--muted); animation: none; }
 
 .modal-scrim { position: absolute; inset: 0; z-index: 70; background: rgba(4, 5, 7, .7); }
 .modal {
-    position: absolute; z-index: 71; left: 12px; right: 12px; bottom: 12px; max-height: 82%;
+    position: absolute; z-index: 71; max-height: 82%;
+    left: max(12px, var(--safe-l)); right: max(12px, var(--safe-r));
+    bottom: calc(12px + var(--safe-b));
     display: flex; flex-direction: column;
     background: var(--card-2); border: 1px solid var(--line-2); border-radius: 18px;
-    padding: 16px 14px calc(16px + var(--safe-b));
+    padding: 16px 14px 16px;
 }
 .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-family: var(--display); font-weight: 700; font-size: 15px; margin-bottom: 12px; }
 .modal-list { flex: 1; min-height: 0; overflow-y: auto; margin: 12px -4px; }
@@ -485,7 +512,7 @@ body.no-circuit .needs-circuit { opacity: .32; pointer-events: none; }
 .hist-files { display: flex; flex-wrap: wrap; }
 
 .ytdl-toast {
-    position: absolute; left: 50%; bottom: 90px; transform: translateX(-50%) translateY(8px);
+    position: absolute; left: 50%; bottom: calc(90px + var(--safe-b)); transform: translateX(-50%) translateY(8px);
     z-index: 80; background: var(--btn); color: var(--text); border: 1px solid var(--line-2);
     padding: 10px 16px; border-radius: 11px; font-size: 13px; font-weight: 600;
     opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none;
