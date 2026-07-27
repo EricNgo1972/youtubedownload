@@ -79,6 +79,30 @@ public class HistoryService
         finally { _gate.Release(); }
     }
 
+    /// <summary>
+    /// Mutates one record in place and persists. Used to fill a PENDING record in once its
+    /// audio has been fetched — the record must keep its id, because playlists refer to
+    /// tracks by record id and replacing it would empty every playlist holding this track.
+    /// </summary>
+    public async Task UpdateAsync(string id, Action<DownloadRecord> mutate)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            lock (_records)
+            {
+                var record = _records.FirstOrDefault(r => r.Id == id);
+                if (record is null) return;
+                mutate(record);
+            }
+            await SaveAsync();
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Records added as links and not fetched yet, newest first.</summary>
+    public IReadOnlyList<DownloadRecord> PendingItems() => Snapshot(r => r.Pending && !r.Archived);
+
     /// <summary>Archives or restores a record (files are left in place).</summary>
     public async Task SetArchivedAsync(string id, bool archived)
     {

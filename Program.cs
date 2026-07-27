@@ -37,6 +37,12 @@ builder.Services.AddSingleton<YoutubeDownloadService>();
 builder.Services.AddSingleton<DownloadJobService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<DownloadJobService>());
 
+// Listening to a track that is only a link: the server relays YouTube's audio rather
+// than downloading it. AddHttpClient gives a pooled handler — a new HttpClient per
+// request would exhaust sockets under seeking, which fires many range requests.
+builder.Services.AddSingleton<PreviewService>();
+builder.Services.AddHttpClient("preview");
+
 var app = builder.Build();
 
 // The service worker is this app's cache layer, so the browser's own HTTP cache must not
@@ -82,10 +88,14 @@ app.MapGet("/api/playlists", (PlaylistService playlists, HistoryService history)
             .Select(rid => (rid, rec: history.Get(rid)))
             .Where(x => x.rec is not null)
             .Select(x => (x.rid, rec: x.rec!, idx: Media.FirstAudioIndex(x.rec!)))
-            .Where(x => x.idx >= 0)
+            // A downloaded track plays from disk; a track that is still only a link plays
+            // via the relay. Either way it has a URL, so the player needs no special case
+            // — the difference shows up as "not saved on this phone", which is the truth.
+            .Where(x => x.idx >= 0 || x.rec.Pending)
             .Select(x => new
             {
-                url = $"/stream/{x.rid}/{x.idx}",
+                url = x.idx >= 0 ? $"/stream/{x.rid}/{x.idx}" : $"/preview/{x.rid}",
+                pending = x.idx < 0,
                 title = x.rec.Title,
                 // Blanked for uploads, where "Uploaded" is a placeholder rather than an
                 // artist — it would otherwise show as the artist in the player and on
@@ -97,6 +107,72 @@ app.MapGet("/api/playlists", (PlaylistService playlists, HistoryService history)
             .ToList(),
     });
     return Results.Json(result);
+});
+
+// Listen to a track that is only a LINK — nothing has been downloaded, so the server
+// relays YouTube's audio straight through to the browser. Range requests are forwarded
+// as-is (and the 206 handed back), because that is what lets <audio> seek and what iOS
+// Safari requires before it will play at all.
+//
+// Nothing is stored: a preview needs a signal every time, which is exactly why Download
+// still exists. See PreviewService for the format and expiry handling.
+app.MapGet("/preview/{id}", async (
+    string id, HistoryService history, PreviewService preview,
+    IHttpClientFactory factory, HttpContext ctx, CancellationToken ct) =>
+{
+    var rec = history.Get(id);
+    if (rec is null || rec.VideoId.Length == 0) return Results.NotFound();
+
+    var http = factory.CreateClient("preview");
+    var resolved = await preview.ResolveAsync(rec.VideoId, refresh: false, ct);
+    if (resolved is null) return Results.StatusCode(StatusCodes.Status502BadGateway);
+
+    var upstream = await PreviewProxy.SendAsync(http, resolved, ctx.Request.Headers.Range, ct);
+
+    // A signed URL that has expired comes back as 403/410. Re-resolve once and retry —
+    // otherwise a track played an hour after it was first previewed simply dies.
+    if (upstream.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Gone)
+    {
+        upstream.Dispose();
+        resolved = await preview.ResolveAsync(rec.VideoId, refresh: true, ct);
+        if (resolved is null) return Results.StatusCode(StatusCodes.Status502BadGateway);
+        upstream = await PreviewProxy.SendAsync(http, resolved, ctx.Request.Headers.Range, ct);
+    }
+
+    using (upstream)
+    {
+        if (!upstream.IsSuccessStatusCode)
+            return Results.StatusCode((int)upstream.StatusCode);
+
+        ctx.Response.StatusCode = (int)upstream.StatusCode;
+        ctx.Response.ContentType = resolved.ContentType;
+        ctx.Response.Headers.AcceptRanges = "bytes";
+        if (upstream.Content.Headers.ContentLength is { } len) ctx.Response.ContentLength = len;
+        if (upstream.Content.Headers.TryGetValues("Content-Range", out var cr))
+            ctx.Response.Headers.ContentRange = cr.First();
+
+        await upstream.Content.CopyToAsync(ctx.Response.Body, ct);
+        return Results.Empty;
+    }
+});
+
+// Has this library track's audio arrived yet? Polled by the device that tapped Download
+// on a track added as a link: there is nothing to save until the server has fetched it.
+// Deliberately tiny and uncached — it is asked repeatedly while a fetch is in flight.
+app.MapGet("/api/track/{id}", (string id, HistoryService history) =>
+{
+    var rec = history.Get(id);
+    if (rec is null) return Results.NotFound();
+    var idx = Media.FirstAudioIndex(rec);
+    return Results.Json(new
+    {
+        id = rec.Id,
+        title = rec.Title,
+        author = TrackVisuals.Artist(rec.Author),
+        pending = rec.Pending,
+        ready = idx >= 0,
+        url = idx >= 0 ? $"/stream/{rec.Id}/{idx}" : null,
+    });
 });
 
 // Timed lyrics for the karaoke view, parsed from the subtitle file downloaded with the
@@ -199,6 +275,22 @@ internal static class ListenPage
 padding:24px;background:#0f1220;color:#9aa0bd;font-family:system-ui,sans-serif}h1{color:#e7e9f3;margin:0 0 8px}</style>
 </head><body><div><h1>Track unavailable</h1><p>This shared track no longer exists.</p></div></body></html>
 """;
+}
+
+internal static class PreviewProxy
+{
+    /// <summary>One relayed request to YouTube's CDN, forwarding the browser's Range so a
+    /// seek fetches only what it needs. ResponseHeadersRead so the body streams through
+    /// rather than being buffered in the server first.</summary>
+    public static Task<HttpResponseMessage> SendAsync(
+        HttpClient http, PreviewService.Resolved resolved,
+        Microsoft.Extensions.Primitives.StringValues range, CancellationToken ct)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, resolved.Url);
+        if (range.Count > 0 && range[0] is { Length: > 0 } r)
+            req.Headers.TryAddWithoutValidation("Range", r);
+        return http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+    }
 }
 
 internal static class Media

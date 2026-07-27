@@ -66,6 +66,40 @@ public class YoutubeDownloadService
             new List<PlannedVideo> { new(videoId.Value, "") });
     }
 
+    /// <summary>
+    /// Resolves a URL to the videos behind it using METADATA ONLY — no streams, no bytes.
+    /// One cheap API call for a video, one listing for a playlist, which is what lets
+    /// pasting a link be instant and free: the library holds the link, and the audio is
+    /// fetched later only for the tracks someone actually wants.
+    /// </summary>
+    public async Task<IReadOnlyList<LinkedVideo>> ResolveLinksAsync(string url, bool playlist, CancellationToken ct)
+    {
+        if (playlist)
+        {
+            if (PlaylistId.TryParse(url) is not { } playlistId)
+                throw new InvalidOperationException("That URL doesn't contain a playlist.");
+
+            var videos = await RetryAsync(
+                async () => await _youtube.Playlists.GetVideosAsync(playlistId).CollectAsync(), ct);
+
+            // PlaylistVideo already carries title/author/duration, so a 200-video playlist
+            // costs one listing rather than 200 metadata calls.
+            return videos.Select(v => new LinkedVideo(
+                v.Id.Value, v.Title, v.Author.ChannelTitle,
+                v.Duration?.ToString(@"hh\:mm\:ss") ?? "")).ToList();
+        }
+
+        if (VideoId.TryParse(url) is not { } videoId)
+            throw new InvalidOperationException("That doesn't look like a YouTube video URL.");
+
+        var video = await RetryAsync(async () => await _youtube.Videos.GetAsync(videoId, ct), ct);
+        return new List<LinkedVideo>
+        {
+            new(video.Id.Value, video.Title, video.Author.ChannelTitle,
+                video.Duration?.ToString(@"hh\:mm\:ss") ?? ""),
+        };
+    }
+
     /// <summary>Downloads one already-resolved video into <paramref name="outputDir"/>,
     /// reporting stage/percent for that single item. Adds a history record and returns it.</summary>
     public Task<DownloadRecord> DownloadSingleAsync(
@@ -73,11 +107,25 @@ public class YoutubeDownloadService
         IProgress<DownloadProgress> progress, CancellationToken ct) =>
         DownloadOneAsync(videoId, opts, outputDir, "", progress, ct);
 
+    /// <summary>
+    /// Fetches the audio for a record that was added as a link, filling it in place.
+    /// The record KEEPS ITS ID: playlists refer to their tracks by record id, so writing a
+    /// new record here would silently empty every playlist the track belongs to.
+    /// </summary>
+    public Task<DownloadRecord> FetchPendingAsync(
+        DownloadRecord pending, DownloadOptions opts,
+        IProgress<DownloadProgress> progress, CancellationToken ct) =>
+        DownloadOneAsync(pending.VideoId, opts,
+            pending.OutputDir is { Length: > 0 } dir ? dir : AppPaths.DownloadsDir(_config),
+            "", progress, ct, pending.Id);
+
     /// <summary>Downloads one video into <paramref name="outputDir"/>; <paramref name="label"/>
     /// prefixes progress stages (e.g. "[3/12] ") when part of a playlist.</summary>
+    /// <param name="existingId">When set, fill the record that already has this id instead
+    /// of adding a new one — see <see cref="FetchPendingAsync"/>.</param>
     private async Task<DownloadRecord> DownloadOneAsync(
         VideoId videoId, DownloadOptions opts, string outputDir, string label,
-        IProgress<DownloadProgress> progress, CancellationToken ct)
+        IProgress<DownloadProgress> progress, CancellationToken ct, string? existingId = null)
     {
         progress.Report(new($"{label}Fetching video info", 0));
         // YouTube occasionally returns a transient failure (throttling / a bad
@@ -92,6 +140,8 @@ public class YoutubeDownloadService
 
         var record = new DownloadRecord
         {
+            // Keep the pending record's identity when filling one in.
+            Id = existingId ?? Guid.NewGuid().ToString("N"),
             VideoId = video.Id.Value,
             Title = video.Title,
             Author = video.Author.ChannelTitle,
@@ -101,6 +151,7 @@ public class YoutubeDownloadService
             Mp4 = opts.Mp4,
             Mp3 = opts.Mp3,
             Subtitles = opts.Subtitles,
+            SpokenWord = opts.SpokenWord,
             OutputDir = outputDir,
         };
 
@@ -119,7 +170,7 @@ public class YoutubeDownloadService
                 record.Files.Add(await DownloadVideoAsync(manifest, ffmpeg, mp4Path, label, progress, ct));
 
             if (opts.Mp3)
-                record.Files.Add(await DownloadAudioAsync(manifest, ffmpeg, mp3Path, label, progress, ct));
+                record.Files.Add(await DownloadAudioAsync(manifest, ffmpeg, mp3Path, label, progress, ct, opts.SpokenWord));
 
             // Subtitles are secondary: a failure here must not discard a good audio/video
             // download, so it's caught and reported rather than failing the whole item.
@@ -145,9 +196,71 @@ public class YoutubeDownloadService
             throw;
         }
 
-        await _history.AddAsync(record);
+        if (existingId is null)
+        {
+            await _history.AddAsync(record);
+        }
+        else
+        {
+            // Fill the pending record in place, preserving anything the user set on it
+            // (its archived flag) and clearing the pending/error state now it has audio.
+            await _history.UpdateAsync(existingId, r =>
+            {
+                r.Title = record.Title;
+                r.Author = record.Author;
+                r.Url = record.Url;
+                r.Duration = record.Duration;
+                r.Files = record.Files;
+                r.OutputDir = record.OutputDir;
+                r.Mp4 = record.Mp4;
+                r.Mp3 = record.Mp3;
+                r.Subtitles = record.Subtitles;
+                r.SpokenWord = record.SpokenWord;
+                r.DownloadedAt = record.DownloadedAt;
+                r.Pending = false;
+                r.FetchError = null;
+            });
+        }
         progress.Report(new($"{label}Saved “{video.Title}”", 1));
         return record;
+    }
+
+    /// <summary>Re-encodes a downloaded stream as a small mono MP3 sized for speech.
+    /// Runs ffmpeg directly so the bitrate can actually be set.</summary>
+    private static async Task EncodeSpeechAsync(string ffmpeg, string input, string output, CancellationToken ct)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo(ffmpeg)
+        {
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in new[]
+                 {
+                     "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                     "-i", input,
+                     "-vn",                                  // drop any cover art
+                     "-ac", "1",                             // mono: one narrator, one channel
+                     "-ar", SpeechHz.ToString(),
+                     "-c:a", "libmp3lame",
+                     "-b:a", $"{SpeechKbps}k",
+                     output,
+                 })
+            psi.ArgumentList.Add(arg);
+
+        using var proc = System.Diagnostics.Process.Start(psi)
+                         ?? throw new InvalidOperationException("Could not start ffmpeg.");
+        // A cancelled item must not leave ffmpeg chewing through a ten-hour file.
+        using var reg = ct.Register(() =>
+        {
+            try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); } catch { /* already gone */ }
+        });
+
+        var errors = await proc.StandardError.ReadToEndAsync(ct);
+        await proc.WaitForExitAsync(ct);
+        if (proc.ExitCode != 0)
+            throw new InvalidOperationException($"ffmpeg failed ({proc.ExitCode}): {errors.Trim()}");
     }
 
     /// <summary>Deletes a partial output file and any ffmpeg "<file>.stream-*.tmp"
@@ -217,13 +330,55 @@ public class YoutubeDownloadService
         return filePath;
     }
 
+    /// <summary>
+    /// Bitrate for speech, in kbps. A voice recording carries almost no information above
+    /// this — it is what Audible ships audiobooks at — while music at the same setting
+    /// would sound obviously poor. Mono at 22.05 kHz for the same reason: a narrator is
+    /// one voice in the middle, so a second channel and the top octave are pure cost.
+    /// On a ten-hour book this is the difference between ~470 MB and ~140 MB, which on a
+    /// phone is the difference between fitting and not.
+    /// </summary>
+    private const int SpeechKbps = 32;
+    private const int SpeechHz = 22050;
+
     private async Task<string> DownloadAudioAsync(
         StreamManifest manifest, string? ffmpeg, string mp3Path, string label,
-        IProgress<DownloadProgress> progress, CancellationToken ct)
+        IProgress<DownloadProgress> progress, CancellationToken ct, bool spokenWord = false)
     {
         var audio = manifest.GetAudioOnlyStreams().GetWithHighestBitrate();
         var stage = $"{label}Audio (MP3)";
         var sub = new Progress<double>(v => progress.Report(new(stage, v)));
+
+        // Speech gets its own path because the conversion helper exposes no bitrate
+        // control — and for spoken word the bitrate is the entire point. Fetch the stream,
+        // then encode it ourselves. The source is still the best available: re-encoding a
+        // already-thin stream down to 32k compounds the damage, and the extra bytes cost
+        // the server's bandwidth once, not the phone's storage forever.
+        if (ffmpeg is not null && spokenWord)
+        {
+            var tmp = mp3Path + ".speech.tmp";
+            try
+            {
+                progress.Report(new(stage, 0,
+                    $"{audio.Bitrate.KiloBitsPerSecond:F0} kbps source → {SpeechKbps} kbps mono (speech)"));
+                await WithRetryAsync(async () =>
+                {
+                    TryDelete(tmp);
+                    await _youtube.Videos.Streams.DownloadAsync(audio, tmp, sub, ct);
+                }, stage, progress, ct);
+
+                progress.Report(new(stage, 0.9, "Encoding for speech…"));
+                TryDelete(mp3Path);
+                await EncodeSpeechAsync(ffmpeg, tmp, mp3Path, ct);
+                return mp3Path;
+            }
+            catch
+            {
+                CleanupPartial(mp3Path);
+                throw;
+            }
+            finally { TryDelete(tmp); }
+        }
 
         if (ffmpeg is not null)
         {

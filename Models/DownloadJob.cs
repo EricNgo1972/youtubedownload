@@ -65,6 +65,13 @@ public class DownloadJob
     /// <summary>True once resolved to more than one video (a playlist).</summary>
     public bool IsPlaylist { get; set; }
 
+    /// <summary>
+    /// Set when this job exists to fetch the audio for a library record that was added as
+    /// a link. The record is filled IN PLACE (it keeps its id), so playlists already
+    /// holding the track stay intact.
+    /// </summary>
+    public string? FetchRecordId { get; set; }
+
     /// <summary>Whole-job cancellation. Replaced on re-run if a prior run cancelled it.</summary>
     public CancellationTokenSource Cts { get; set; } = new();
 

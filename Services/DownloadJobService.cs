@@ -44,6 +44,106 @@ public class DownloadJobService : BackgroundService
         return job;
     }
 
+    /// <summary>
+    /// Adds links to the library WITHOUT downloading anything: one metadata call resolves
+    /// the URL, and each video becomes a pending record. Returns how many were added and
+    /// how many were already known.
+    /// </summary>
+    public async Task<(IReadOnlyList<DownloadRecord> Added, int Existing, int Updated)> AddLinksAsync(
+        string url, DownloadOptions options, CancellationToken ct)
+    {
+        var videos = await _downloader.ResolveLinksAsync(url, options.Playlist, ct);
+        var added = new List<DownloadRecord>();
+        var updated = new List<DownloadRecord>();
+        var existing = 0;
+        foreach (var v in videos)
+        {
+            if (_history.FirstByVideoId(v.VideoId) is { } known)
+            {
+                // Already here. If it hasn't been fetched yet, re-adding the link is how a
+                // user corrects the choices they made the first time — most often ticking
+                // "audiobook" after the fact — so adopt the new options rather than
+                // silently ignoring them. A track that already has audio is left alone.
+                if (known.Pending)
+                {
+                    await _history.UpdateAsync(known.Id, r =>
+                    {
+                        r.Mp4 = options.Mp4;
+                        r.Mp3 = options.Mp3;
+                        r.Subtitles = options.Subtitles;
+                        r.SpokenWord = options.SpokenWord;
+                    });
+                    updated.Add(known);
+                }
+                else existing++;
+                continue;
+            }
+
+            var rec = new DownloadRecord
+            {
+                VideoId = v.VideoId,
+                Title = v.Title,
+                Author = v.Author,
+                Duration = v.Duration,
+                Url = $"https://youtu.be/{v.VideoId}",
+                // When it was added to the library. A fetch overwrites this with the time
+                // the audio actually arrived.
+                DownloadedAt = DateTimeOffset.Now,
+                Mp4 = options.Mp4,
+                Mp3 = options.Mp3,
+                Subtitles = options.Subtitles,
+                SpokenWord = options.SpokenWord,
+                Pending = true,
+            };
+            await _history.AddAsync(rec);
+            added.Add(rec);
+        }
+        // Re-added pending tracks come back in the list too, so the page can show them
+        // with their (now corrected) settings instead of appearing to have done nothing.
+        added.AddRange(updated);
+        return (added, existing, updated.Count);
+    }
+
+    /// <summary>
+    /// Queues the actual fetch for a record that was added as a link. Returns the job, or
+    /// null if the record is unknown or already has its audio.
+    /// </summary>
+    public DownloadJob? EnqueueFetch(string recordId)
+    {
+        var rec = _history.Get(recordId);
+        if (rec is null || !rec.Pending) return null;
+
+        // Already queued or running — don't stack duplicate fetches on one record.
+        if (_jobs.Values.Any(j => j.IsActive && j.FetchRecordId == recordId)) return null;
+
+        var job = new DownloadJob
+        {
+            Url = rec.Url,
+            Options = new DownloadOptions(rec.Mp4, rec.Mp3, rec.Subtitles, Playlist: false, SpokenWord: rec.SpokenWord),
+            CreatedAt = DateTimeOffset.Now,
+            FetchRecordId = recordId,
+        };
+        job.Items.Add(new DownloadItem { VideoId = rec.VideoId, Title = rec.Title });
+        _jobs[job.Id] = job;
+        _queue.Writer.TryWrite(job);
+        return job;
+    }
+
+    /// <summary>
+    /// How the fetch for one library record is going, or null if nothing is fetching it.
+    /// Lets a track's own row show its own progress, so starting a download and watching
+    /// it are the same place rather than two different pages.
+    /// </summary>
+    public FetchState? FetchProgress(string recordId)
+    {
+        var job = _jobs.Values.FirstOrDefault(j => j.FetchRecordId == recordId);
+        var item = job?.Items.FirstOrDefault();
+        if (job is null || item is null) return null;
+        return new FetchState(item.Percent, item.Stage, item.Error, job.IsActive);
+    }
+
+    public record FetchState(int Percent, string Stage, string? Error, bool Active);
+
     public IReadOnlyList<DownloadJob> All() =>
         _jobs.Values.OrderByDescending(j => j.CreatedAt).ToList();
 
@@ -172,8 +272,9 @@ public class DownloadJobService : BackgroundService
 
         try
         {
-            // Phase 1: resolve the URL into the full item list — once per job.
-            if (job.Items.Count == 0)
+            // Phase 1: resolve the URL into the full item list — once per job. A fetch job
+            // already knows its single item (the pending record), so it skips this.
+            if (job.Items.Count == 0 && job.FetchRecordId is null)
             {
                 job.Status = JobStatus.Running;
                 job.Stage = "Fetching item list…";
@@ -227,8 +328,12 @@ public class DownloadJobService : BackgroundService
 
                 try
                 {
-                    var record = await _downloader.DownloadSingleAsync(
-                        item.VideoId, job.Options, job.OutputDir, progress, itemLinked.Token);
+                    // A fetch job fills the pending record in place; everything else adds a
+                    // new one. Either way the item ends up pointing at a record with audio.
+                    var record = job.FetchRecordId is { } pendingId && _history.Get(pendingId) is { } pending
+                        ? await _downloader.FetchPendingAsync(pending, job.Options, progress, itemLinked.Token)
+                        : await _downloader.DownloadSingleAsync(
+                            item.VideoId, job.Options, job.OutputDir, progress, itemLinked.Token);
                     item.RecordId = record.Id;
                     if (string.IsNullOrWhiteSpace(item.Title)) item.Title = record.Title;
                     item.Percent = 100;
@@ -253,6 +358,11 @@ public class DownloadJobService : BackgroundService
                     item.Status = JobStatus.Failed;
                     item.Stage = "Failed";
                     item.Error = ex.Message;
+                    // Put the reason on the record too: the Add page's queue is in-memory
+                    // and transient, so without this a failed fetch would leave the row
+                    // saying only "not fetched" with no clue why.
+                    if (job.FetchRecordId is { } failedId)
+                        await _history.UpdateAsync(failedId, r => r.FetchError = ex.Message);
                     _logger.LogError(ex, "Item {VideoId} in job {JobId} failed", item.VideoId, job.Id);
                 }
                 finally

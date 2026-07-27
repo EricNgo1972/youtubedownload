@@ -24,8 +24,26 @@ public class DownloadRecord
     public bool Mp3 { get; set; }
     public bool Subtitles { get; set; }
 
+    /// <summary>Encode the audio for speech rather than music. Remembered on the record so
+    /// a track added as a link is still fetched the way the user asked when its turn comes.</summary>
+    public bool SpokenWord { get; set; }
+
     /// <summary>Archived records are kept (files untouched) but hidden from the main list.</summary>
     public bool Archived { get; set; }
+
+    /// <summary>
+    /// A track added as a LINK only: its title, author and duration are known but no bytes
+    /// exist on the server yet, so <see cref="Files"/> is empty. Pasting a URL is then
+    /// instant and free, and nothing is fetched until someone actually wants the track.
+    ///
+    /// Records written before this field existed deserialize to false, which is correct:
+    /// they were all created by a completed download.
+    /// </summary>
+    public bool Pending { get; set; }
+
+    /// <summary>Why the last fetch of a pending track failed, if it did. Kept so the row
+    /// can say what went wrong and offer a retry rather than silently staying pending.</summary>
+    public string? FetchError { get; set; }
 
     /// <summary>Absolute paths of every file written for this download.</summary>
     public List<string> Files { get; set; } = new();
