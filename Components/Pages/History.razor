@@ -6,31 +6,33 @@
 
 <PageTitle>Library</PageTitle>
 
-<div class="row-between">
-    <h1>@(_showArchived ? "Archived" : "Library")</h1>
-    <div class="header-actions">
-        @if (_showArchived || _archivedCount > 0)
-        {
-            <button class="btn btn-ghost" @onclick="ToggleView">
-                @(_showArchived ? "Back to library" : $"Show archived ({_archivedCount})")
-            </button>
-        }
-    </div>
+@* Filter chips are client-side (offline/not-saved is Cache API state the server can't
+   see), so ui.js drives them and filters rows by [data-off-for]. *@
+<div class="chips">
+    <button class="chip on" data-filter="all">All @_records.Count</button>
+    <button class="chip" data-filter="offline">Offline <span data-count="offline">0</span></button>
+    <button class="chip" data-filter="missing">Not saved <span data-count="missing">0</span></button>
+    @if (_showArchived || _archivedCount > 0)
+    {
+        <button class="chip needs-circuit" @onclick="ToggleView">
+            @(_showArchived ? "← Library" : $"Archived {_archivedCount}")
+        </button>
+    }
 </div>
 
 @if (!_showArchived)
 {
-    <div class="card add-track">
+    <div class="card needs-circuit">
         <div class="field-label">Add a track to your library</div>
         <div class="add-track-sources">
             <label class="add-source">
-                <span class="add-source-title">⬆️ Upload audio</span>
+                <span class="add-source-title">⬆ Upload audio</span>
                 <span class="hint">@UploadService.AllowedExtsLabel — from this device</span>
                 <InputFile OnChange="OnUpload" multiple accept="audio/*" class="file-input" />
             </label>
-            <a class="add-source add-source-link" href="download">
-                <span class="add-source-title">▶️ From YouTube</span>
-                <span class="hint">paste a video URL to download its audio</span>
+            <a class="add-source" href="download">
+                <span class="add-source-title">↓ From YouTube</span>
+                <span class="hint">paste a link to download its audio</span>
             </a>
         </div>
         @if (_uploading)
@@ -45,7 +47,7 @@
         }
         @if (_uploadMsg is not null)
         {
-            <div class="hint" style="margin-top:12px; color: var(--ok)">✓ @_uploadMsg</div>
+            <div class="hint" style="margin-top:12px;color:var(--accent)">✓ @_uploadMsg</div>
         }
         @if (_uploadError is not null)
         {
@@ -56,62 +58,80 @@
 
 @if (_records.Count == 0)
 {
-    <div class="card hint">@(_showArchived ? "Nothing archived." : "Your library is empty. Upload a track or download one from YouTube above.")</div>
+    <div class="empty">
+        <div class="empty-t">@(_showArchived ? "Nothing archived" : "Your library is empty")</div>
+        <div class="empty-s">@(_showArchived ? "Archived tracks keep their files but stay out of the main list." : "Upload a track, or download one from a link.")</div>
+    </div>
 }
 else
 {
-    <div class="hist-list">
+    <div class="empty" id="no-results" hidden>
+        <div class="empty-t">Nothing matches</div>
+        <div class="empty-s">Try a different search, or switch the filter above.</div>
+    </div>
+
+    <div id="lib-rows">
         @foreach (var r in _records)
         {
             var audioIndex = FirstAudioIndex(r);
-            <div class="hist-card">
-                <div class="hist-top">
-                    <span class="hist-title-wrap">
-                        @if (!string.IsNullOrWhiteSpace(r.Url))
-                        {
-                            <a class="hist-title" href="@r.Url" target="_blank" rel="noopener">@r.Title</a>
-                        }
-                        else
-                        {
-                            <span class="hist-title">@r.Title</span>
-                        }
+            var trackUrl = audioIndex >= 0 ? $"/stream/{r.Id}/{audioIndex}" : null;
+            <div class="trk" data-track-url="@trackUrl" data-title="@r.Title"
+                 data-artist="@TrackVisuals.Artist(r.Author)"
+                 data-share-id="@r.Id" data-share-title="@r.Title">
+                <button class="trk-hit" onclick="ytdlPlayer.playEl(this)"
+                        data-track-url="@trackUrl" data-title="@r.Title"
+                        data-artist="@TrackVisuals.Artist(r.Author)" disabled="@(trackUrl is null)">
+                    <span class="trk-art" style="background:@TrackVisuals.Tint(r.Id)">@TrackVisuals.Mono(r.Title)</span>
+                    <span class="trk-main">
+                        <span class="trk-title">@r.Title</span>
+                        <span class="trk-sub">
+                            @if (TrackVisuals.Artist(r.Author) is { Length: > 0 } a)
+                            {
+                                <span class="trk-artist">@a</span>
+                                <span class="trk-dot">·</span>
+                            }
+                            <span class="trk-off" data-off-for="@trackUrl">…</span>
+                            @if (LyricsService.Has(r))
+                            {
+                                <span class="trk-lrc" title="Lyrics available">LRC</span>
+                            }
+                        </span>
                     </span>
+                    <span class="trk-dur">@TrackVisuals.Duration(r.Duration)</span>
+                </button>
+                <button class="trk-more" aria-label="More" onclick="ytdlUI.sheet(this)">⋯</button>
+
+                @* Driven by the sheet — see the note in Playlists.razor. *@
+                <span class="row-ops">
                     @if (_showArchived)
                     {
-                        <button class="btn-mini" @onclick="() => SetArchived(r.Id, false)">Restore</button>
+                        <button class="op-restore" @onclick="() => SetArchived(r.Id, false)"></button>
                     }
                     else
                     {
-                        <button class="btn-mini" @onclick="() => SetArchived(r.Id, true)">Archive</button>
+                        <button class="op-archive" @onclick="() => SetArchived(r.Id, true)"></button>
                     }
-                </div>
-
-                <div class="hist-meta">
-                    <span class="src-badge src-@r.Source.ToString().ToLowerInvariant()">@SourceLabel(r.Source)</span>
-                    @if (!string.IsNullOrWhiteSpace(r.Author) && r.Source != TrackSource.Upload) { <span>@r.Author</span> }
-                    @if (!string.IsNullOrWhiteSpace(r.Duration)) { <span>· @r.Duration</span> }
-                    <span>· @r.DownloadedAt.LocalDateTime.ToString("g")</span>
-                </div>
-
-                <div class="hist-actions">
-                    @if (audioIndex >= 0)
+                </span>
+                <span class="row-files" hidden>
+                    @for (var i = 0; i < r.Files.Count; i++)
                     {
-                        <button class="btn-play play-label" data-track-url="@($"/stream/{r.Id}/{audioIndex}")"
-                                data-title="@r.Title" data-artist="@r.Author"
-                                onclick="ytdlPlayer.playEl(this)">▶ Play</button>
-                        <button class="btn-mini" title="Share a listen link"
-                                data-share-id="@r.Id" data-share-title="@r.Title"
-                                onclick="ytdlShare(this)">🔗 Share</button>
+                        <a href="@($"files/{r.Id}/{i}")" download data-label="@FileLabel(r.Files[i])"></a>
                     }
-                    <div class="hist-files">
-                        @for (var i = 0; i < r.Files.Count; i++)
-                        {
-                            <a class="tag tag-link" href="@($"files/{r.Id}/{i}")" download>@FileLabel(r.Files[i])</a>
-                        }
-                    </div>
-                </div>
+                </span>
             </div>
         }
+    </div>
+
+    <div class="storage">
+        <div class="eyebrow">On this phone</div>
+        <div class="storage-bar"><div class="storage-fill" id="storage-fill"></div></div>
+        <div class="storage-label" id="storage-label">Measuring…</div>
+        @* Server build vs. what this device is actually running. A PWA caches hard, so
+           these two can drift apart silently — showing both makes "why don't I see the
+           new feature?" a five-second question instead of a debugging session. *@
+        <div class="storage-label build-stamp">
+            Server build @BuildInfo.Stamp · <span id="sw-version">checking cache…</span>
+        </div>
     </div>
 }
 

@@ -11,13 +11,15 @@
 // (one bar on a mountain) an unbounded fetch can hang for minutes — that is what made
 // the app look frozen even though the file was sitting in the cache.
 (function () {
-    var audio, bar, elTitle, elArtist, elPlay, elShuffle, elStatus, elSrc;
+    var audio, bar, full, elTitle, elArtist, elPlay, elStatus, elArt;
     var status = '';  // '' | 'loading' | 'ok' | 'error'
     var queue = [];   // live play order (already shuffled when shuffle is on)
     var src = [];     // original unshuffled order, so shuffle can be turned back off
     var idx = -1;
     var ctx = '';     // context name (playlist) for the lock-screen "album"
+    var ctxId = '';   // …and its id, so the right playlist card lights up
     var shuffle = localStorage.getItem('ytdl-shuffle') === '1';
+    var repeat = localStorage.getItem('ytdl-repeat') === '1';
     var lastSave = 0;
     var stallTimer = null;   // watchdog for "load started but no audio ever arrived"
     var API_MS = 2500;       // give up on the playlist API this fast, then use local data
@@ -40,59 +42,367 @@
     function shuf(a) { for (var k = a.length - 1; k > 0; k--) { var r = Math.floor(Math.random() * (k + 1)); var t = a[k]; a[k] = a[r]; a[r] = t; } return a; }
     function cur() { return (idx >= 0 && queue[idx]) ? queue[idx] : null; }
 
-    // --- the now-playing bar (injected once, persists across in-page navigation) ---
+    // --- the mini bar + full-screen now playing (injected once, persist across nav) ---
+    // The mini bar mounts into #np-slot so it sits between the scrolling view and the tab
+    // bar; the full player is absolutely positioned over the whole app column.
     function injectBar() {
         if (!document.getElementById('ytdl-bar')) {
             var el = document.createElement('div');
             el.id = 'ytdl-bar';
             el.className = 'np-bar';
             el.innerHTML =
-                '<div class="np-meta"><div class="np-title" id="np-title">—</div>' +
-                '<div class="np-artist" id="np-artist"></div>' +
-                '<div class="np-src" id="np-src"></div>' +
-                '<div class="np-status" id="np-status"></div></div>' +
-                '<div class="np-ctl">' +
-                '<button id="np-prev" title="Previous">⏮</button>' +
-                '<button id="np-play" class="np-play" title="Play/Pause">▶</button>' +
-                '<button id="np-next" title="Next">⏭</button>' +
+                '<div class="np-prog"><div class="np-prog-fill" id="np-prog"></div></div>' +
+                '<div class="np-row">' +
+                  '<button class="np-open" id="np-open">' +
+                    '<span class="np-art" id="np-art">♪</span>' +
+                    '<span class="np-meta"><span class="np-title" id="np-title">—</span>' +
+                    '<span class="np-sub" id="np-sub"></span></span>' +
+                  '</button>' +
+                  '<button class="np-play" id="np-play" aria-label="Play/Pause">▶</button>' +
+                  '<button class="np-skip" id="np-next" aria-label="Next">▶▶</button>' +
                 '</div>' +
+                '<div class="np-status" id="np-status"></div>' +
                 '<audio id="np-audio" preload="none"></audio>';
-            document.body.appendChild(el);
+            (document.getElementById('np-slot') || document.body).appendChild(el);
+        }
+        if (!document.getElementById('ytdl-npf')) {
+            var f = document.createElement('div');
+            f.id = 'ytdl-npf';
+            f.className = 'np-full';
+            f.innerHTML =
+                '<div class="npf-head">' +
+                  '<button class="icon-btn" id="npf-close" aria-label="Close">▼</button>' +
+                  '<div class="npf-from" id="npf-from"></div>' +
+                  '<button class="npf-tab" id="npf-lyrbtn">Lyrics</button>' +
+                '</div>' +
+                '<div class="npf-body">' +
+                  '<div class="npf-art" id="npf-art">♪</div>' +
+                  '<div class="npf-lyrics" id="npf-lyrics" hidden></div>' +
+                  '<div class="npf-meta">' +
+                    '<div class="npf-title" id="npf-title"></div>' +
+                    '<div class="npf-artist" id="npf-artist"></div>' +
+                    '<div class="npf-badge" id="npf-badge"></div>' +
+                  '</div>' +
+                  '<div>' +
+                    '<div class="npf-seek" id="npf-seek"><div class="npf-track"><div class="npf-fill" id="npf-fill"></div></div></div>' +
+                    '<div class="npf-times"><div id="npf-pos">0:00</div><div id="npf-dur">0:00</div></div>' +
+                  '</div>' +
+                  '<div class="npf-ctl">' +
+                    '<button class="npf-side" id="npf-shuffle" aria-label="Shuffle">⤮</button>' +
+                    '<button class="npf-step" id="npf-prev" aria-label="Previous">◀◀</button>' +
+                    '<button class="npf-play" id="npf-play" aria-label="Play/Pause">▶</button>' +
+                    '<button class="npf-step" id="npf-next" aria-label="Next">▶▶</button>' +
+                    '<button class="npf-side" id="npf-repeat" aria-label="Repeat">↻</button>' +
+                  '</div>' +
+                '</div>';
+            (document.querySelector('.app') || document.body).appendChild(f);
         }
         bind();
     }
 
+    function $(id) { return document.getElementById(id); }
+
     function bind() {
-        bar = document.getElementById('ytdl-bar');
-        audio = document.getElementById('np-audio');
-        elTitle = document.getElementById('np-title');
-        elArtist = document.getElementById('np-artist');
-        elPlay = document.getElementById('np-play');
-        elStatus = document.getElementById('np-status');
-        elSrc = document.getElementById('np-src');
+        bar = $('ytdl-bar');
+        audio = $('np-audio');
+        elTitle = $('np-title');
+        elArtist = $('np-sub');
+        elPlay = $('np-play');
+        elStatus = $('np-status');
+        elArt = $('np-art');
+        full = $('ytdl-npf');
         if (audio._ytdlBound) { syncShuffle(); return; }
         audio._ytdlBound = true;
 
-        audio.addEventListener('ended', function () { forgetPos(); next(); });
-        audio.addEventListener('play', function () { elPlay.textContent = '⏸'; emit(true); });
+        audio.addEventListener('ended', function () { forgetPos(); if (repeat) playAt(idx); else next(); });
+        audio.addEventListener('play', function () { setGlyph('❙❙'); emit(true); });
         audio.addEventListener('playing', function () { setStatus('ok'); });   // real audio started
         audio.addEventListener('canplay', function () { if (status === 'loading') setStatus('ok'); });
         audio.addEventListener('progress', function () { armStall(); });   // bytes arriving — reset the watchdog
         audio.addEventListener('waiting', function () { setStatus('loading'); armStall(); });   // buffering
         audio.addEventListener('stalled', function () { if (!audio.paused) { setStatus('loading'); armStall(); } });
-        audio.addEventListener('pause', function () { clearStall(); elPlay.textContent = '▶'; elPlay.classList.remove('loading'); emit(false); });
+        audio.addEventListener('pause', function () { clearStall(); setGlyph('▶'); emit(false); });
         audio.addEventListener('error', function () {
             if (audio.error && audio.error.code === 1) return;   // MEDIA_ERR_ABORTED — a new load replaced it
             fail();
         });
-        audio.addEventListener('loadedmetadata', restorePos);
-        audio.addEventListener('timeupdate', savePos);
+        audio.addEventListener('loadedmetadata', function () { restorePos(); paintTime(); });
+        audio.addEventListener('timeupdate', function () { savePos(); paintTime(); });
+        audio.addEventListener('durationchange', paintTime);
 
-        // In the error state the play button becomes a retry; otherwise play/pause.
-        elPlay.addEventListener('click', function () { if (status === 'error') playAt(idx); else toggle(); });
-        document.getElementById('np-prev').addEventListener('click', prev);
-        document.getElementById('np-next').addEventListener('click', next);
-        syncShuffle();   // still syncs any [data-shuffle] buttons on the page
+        // In the error state the play buttons become a retry; otherwise play/pause.
+        function onPlayBtn() { if (status === 'error') playAt(idx); else toggle(); }
+        elPlay.addEventListener('click', onPlayBtn);
+        $('npf-play').addEventListener('click', onPlayBtn);
+        $('np-next').addEventListener('click', next);
+        $('npf-next').addEventListener('click', next);
+        $('npf-prev').addEventListener('click', prev);
+        $('np-open').addEventListener('click', openFull);
+        $('npf-close').addEventListener('click', closeFull);
+        $('npf-shuffle').addEventListener('click', function () { setShuffle(!shuffle); });
+        $('npf-repeat').addEventListener('click', function () {
+            repeat = !repeat;
+            localStorage.setItem('ytdl-repeat', repeat ? '1' : '0');
+            $('npf-repeat').classList.toggle('on', repeat);
+        });
+        $('npf-seek').addEventListener('click', seekFromEvent);
+        $('npf-lyrbtn').addEventListener('click', function () { setTab(tab === 'lyrics' ? 'cover' : 'lyrics'); });
+        $('npf-repeat').classList.toggle('on', repeat);
+        // Apply the remembered Cover/Lyrics choice. Without this the markup says "Lyrics"
+        // while the state says lyrics, so the first tap toggles the wrong way.
+        setTab(tab);
+        // Reading ahead by hand should pause the auto-scroll, not fight it. Keyed off
+        // real input events rather than 'scroll', because our own smooth scrolling emits
+        // scroll events too and would otherwise permanently suppress itself.
+        ['wheel', 'touchmove', 'pointerdown'].forEach(function (ev) {
+            $('npf-lyrics').addEventListener(ev, function () { userScrolledAt = Date.now(); }, { passive: true });
+        });
+        syncShuffle();   // syncs the [data-shuffle] buttons on the page too
+    }
+
+    // --- lyrics / karaoke -----------------------------------------------------------
+    // Lines come from the subtitle file downloaded with the track (see LyricsService),
+    // so there is no third-party lyrics service and nothing to fetch on a plane. The
+    // active line wipes left-to-right in the accent colour as it is sung/spoken.
+    var tab = localStorage.getItem('ytdl-nptab') === 'lyrics' ? 'lyrics' : 'cover';
+    var lyrics = [];      // [{t, text}] for the current track
+    var lyrEls = [];      // one element per line
+    var lyrUrl = '';      // which track the loaded lines belong to
+    var lyrTracks = [];   // selectable subtitle tracks (languages) for it
+    var lyrPicked = 0;    // index of the one being shown
+    var lyrId = '';       // record id, for remembering the language choice
+    var lyrActive = -1;
+    var lyrSeq = 0;       // guards against a slow load landing on a later track
+    var userScrolledAt = 0;
+
+    function recordId(url) { var m = /\/stream\/([^/]+)/.exec(url || ''); return m ? m[1] : null; }
+
+    function setTab(t) {
+        tab = t;
+        localStorage.setItem('ytdl-nptab', t);
+        var btn = $('npf-lyrbtn'), box = $('npf-lyrics'), art = $('npf-art');
+        if (!btn) return;
+        btn.textContent = t === 'lyrics' ? 'Cover' : 'Lyrics';
+        btn.classList.toggle('on', t === 'lyrics');
+        if (box) box.hidden = t !== 'lyrics';
+        if (art) art.hidden = t === 'lyrics';
+        if (t === 'lyrics') { loadLyrics(cur()); scrollToActive(true); }
+    }
+
+    // Which subtitle track the user chose for a given record, remembered per track: a
+    // video may ship several languages and the right one is a personal choice, not a
+    // guess the server can make.
+    function langKey(id) { return 'ytdl.lyrlang.' + id; }
+    function pickedTrack(id) {
+        var v = parseInt(localStorage.getItem(langKey(id)) || '', 10);
+        return isFinite(v) ? v : 0;
+    }
+
+    async function loadLyrics(t, forceIndex) {
+        var box = $('npf-lyrics');
+        if (!box || !t) return;
+        if (lyrUrl === t.url && forceIndex === undefined) return;   // already loaded
+        var id = recordId(t.url);
+        if (!id) { showNoLyrics('These lyrics aren’t available for this track.'); return; }
+
+        var idx = forceIndex !== undefined ? forceIndex : pickedTrack(id);
+        var mySeq = ++lyrSeq;
+        lyrUrl = t.url; lyrics = []; lyrEls = []; lyrActive = -1;
+        box.innerHTML = '<div class="npf-lyr-msg">Loading lyrics…</div>';
+        try {
+            // Cache-first in the service worker, and prefetched when a track is saved
+            // offline — so this resolves with no network on a saved track.
+            var res = await fetch('/api/lyrics/' + id + '?t=' + idx);
+            if (!res.ok) throw new Error('status ' + res.status);
+            var data = await res.json();
+            if (mySeq !== lyrSeq) return;
+            lyrics = data.lines || [];
+            lyrTracks = data.tracks || [];
+            lyrPicked = data.selected || 0;
+            lyrId = id;
+        } catch (e) {
+            if (mySeq !== lyrSeq) return;
+            showNoLyrics(navigator.onLine
+                ? 'No lyrics saved for this track.'
+                : 'Lyrics for this track aren’t on this phone.');
+            return;
+        }
+        if (!lyrics.length) { showNoLyrics('No lyrics saved for this track.'); return; }
+        renderLyrics();
+    }
+
+    function chooseTrack(i) {
+        if (!lyrId) return;
+        localStorage.setItem(langKey(lyrId), String(i));
+        loadLyrics(cur(), i);
+    }
+
+    function showNoLyrics(msg) {
+        var box = $('npf-lyrics');
+        if (!box) return;
+        lyrics = []; lyrEls = [];
+        box.innerHTML = '<div class="npf-lyr-empty"><div class="npf-lyr-t">No lyrics</div>' +
+            '<div class="npf-lyr-s"></div></div>';
+        box.querySelector('.npf-lyr-s').textContent = msg +
+            ' Lyrics come from the subtitles downloaded with a track — re-download it with ' +
+            'subtitles on, or drop an .lrc file next to the audio.';
+    }
+
+    function renderLyrics() {
+        var box = $('npf-lyrics');
+        var frag = document.createDocumentFragment();
+
+        // Language chooser, only when there is actually a choice to make. Sticky so it
+        // stays reachable while the words scroll underneath.
+        if (lyrTracks.length > 1) {
+            var bar = document.createElement('div');
+            bar.className = 'npf-lyr-langs';
+            lyrTracks.forEach(function (tr) {
+                var b = document.createElement('button');
+                b.className = 'npf-lang' + (tr.i === lyrPicked ? ' on' : '');
+                b.textContent = tr.label || tr.lang || ('Track ' + (tr.i + 1));
+                b.dataset.lyrTrack = tr.i;
+                bar.appendChild(b);
+            });
+            frag.appendChild(bar);
+        }
+
+        lyrEls = new Array(lyrics.length);
+        for (var i = 0; i < lyrics.length; i++) {
+            var el = document.createElement('div');
+            el.className = 'npf-lyr';
+            el.textContent = lyrics[i].text;
+            el.dataset.i = i;
+            frag.appendChild(el);
+            lyrEls[i] = el;
+        }
+        box.innerHTML = '';
+        box.appendChild(frag);
+        lyrActive = -1;
+        paintLyrics(true);
+    }
+
+    // Tap a line to jump there; one delegated listener rather than one per line, which
+    // matters when an audiobook has thousands of them.
+    document.addEventListener('click', function (e) {
+        if (!e.target.closest) return;
+        var lang = e.target.closest('[data-lyr-track]');
+        if (lang) { chooseTrack(Number(lang.dataset.lyrTrack)); return; }
+        var el = e.target.closest('.npf-lyr');
+        if (!el || !audio) return;
+        var l = lyrics[Number(el.dataset.i)];
+        if (l) { try { audio.currentTime = l.t; } catch (err) { } audio.play().catch(function () { }); }
+    });
+
+    function activeIndex(pos) {
+        // Binary search — a linear scan over thousands of lines four times a second is
+        // exactly the kind of thing that makes a phone warm.
+        var lo = 0, hi = lyrics.length - 1, best = -1;
+        while (lo <= hi) {
+            var mid = (lo + hi) >> 1;
+            if (lyrics[mid].t <= pos) { best = mid; lo = mid + 1; } else { hi = mid - 1; }
+        }
+        return best;
+    }
+
+    function paintLyrics(force) {
+        if (!lyrics.length || tab !== 'lyrics' || !audio) return;
+        var pos = audio.currentTime || 0;
+        var i = activeIndex(pos);
+        if (i !== lyrActive) {
+            if (lyrEls[lyrActive]) { lyrEls[lyrActive].classList.remove('on'); lyrEls[lyrActive].style.backgroundImage = ''; }
+            if (lyrEls[i]) lyrEls[i].classList.add('on');
+            lyrActive = i;
+            scrollToActive(force);
+        }
+        if (lyrEls[i]) {
+            // Karaoke wipe: fill the line in proportion to how far through it we are.
+            var next = lyrics[i + 1];
+            var span = Math.max(0.5, (next ? next.t : (audio.duration || lyrics[i].t + 6)) - lyrics[i].t);
+            var f = Math.max(0, Math.min(100, ((pos - lyrics[i].t) / span) * 100));
+            lyrEls[i].style.backgroundImage =
+                'linear-gradient(90deg,var(--accent) ' + f + '%,var(--dim) ' + f + '%)';
+        }
+    }
+
+    function scrollToActive(force) {
+        var box = $('npf-lyrics'), el = lyrEls[lyrActive];
+        if (!box || !el || tab !== 'lyrics') return;
+        // Leave manual scrolling alone for a few seconds so reading ahead isn't yanked back.
+        if (!force && Date.now() - userScrolledAt < 4000) return;
+        var top = el.offsetTop - box.clientHeight / 2 + el.offsetHeight / 2;
+        box.scrollTo({ top: Math.max(0, top), behavior: force ? 'auto' : 'smooth' });
+    }
+
+    function setGlyph(g) {
+        if (elPlay) elPlay.textContent = g;
+        var p = $('npf-play'); if (p) p.textContent = g;
+        if (g === '▶' && elPlay) { elPlay.classList.remove('loading'); if (p) p.classList.remove('loading'); }
+    }
+
+    // --- full-screen player -------------------------------------------------------
+    function openFull() { if (!cur()) return; full.classList.add('show'); paintFull(); }
+    function closeFull() { full.classList.remove('show'); }
+
+    function paintFull() {
+        var t = cur(); if (!t || !full) return;
+        $('npf-from').textContent = ctx ? 'Playing from ' + ctx : 'Playing from library';
+        $('npf-title').textContent = t.title || '';
+        $('npf-artist').textContent = t.author || '';
+        var art = $('npf-art');
+        art.textContent = mono(t.title);
+        art.style.background = tint(t.url);
+        if (tab === 'lyrics' && lyrUrl !== t.url) loadLyrics(t);   // new track: new words
+        paintTime();
+    }
+
+    function fmt(s) {
+        if (!isFinite(s) || s < 0) return '0:00';
+        var m = Math.floor(s / 60), r = Math.floor(s % 60);
+        if (m < 60) return m + ':' + (r < 10 ? '0' : '') + r;
+        var h = Math.floor(m / 60);
+        return h + ':' + ((m % 60) < 10 ? '0' : '') + (m % 60) + ':' + (r < 10 ? '0' : '') + r;
+    }
+
+    function paintTime() {
+        if (!audio) return;
+        var d = audio.duration, pos = audio.currentTime || 0;
+        var pct = (isFinite(d) && d > 0) ? (pos / d) * 100 : 0;
+        var mini = $('np-prog'); if (mini) mini.style.width = pct + '%';
+        if (!full || !full.classList.contains('show')) return;
+        $('npf-fill').style.width = pct + '%';
+        $('npf-pos').textContent = fmt(pos);
+        $('npf-dur').textContent = isFinite(d) ? fmt(d) : '—';
+        paintLyrics(false);
+    }
+
+    function seekFromEvent(e) {
+        if (!audio || !isFinite(audio.duration)) return;
+        var r = e.currentTarget.getBoundingClientRect();
+        var f = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+        try { audio.currentTime = f * audio.duration; } catch (err) { }
+        paintTime();
+    }
+
+    // Artwork stand-ins, matching what the server renders into the rows so a track looks
+    // the same in the list and in the player.
+    function mono(title) {
+        var parts = String(title || '').split(/\s+/).filter(Boolean);
+        var out = '';
+        for (var i = 0; i < parts.length && out.length < 2; i++) {
+            var m = /[\p{L}\p{N}]/u.exec(parts[i]);
+            if (m) out += m[0];
+        }
+        return out ? out.toUpperCase() : '♪';
+    }
+    var HUES = [148, 190, 262, 24, 330, 96];
+    function tint(seed) {
+        // Match TrackVisuals.Tint: hash the record id out of "/stream/{id}/{idx}".
+        var m = /\/stream\/([^/]+)/.exec(seed || '');
+        var id = m ? m[1] : String(seed || '');
+        var h = 0;
+        for (var i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) & 0x7FFFFFFF;
+        return 'oklch(0.42 0.09 ' + HUES[h % HUES.length] + ')';
     }
 
     // Tell the current page which track is playing so it can highlight the row.
@@ -130,9 +440,12 @@
         var t = queue[i];
         elTitle.textContent = t.title || '—';
         elArtist.textContent = t.author || '';
+        elArt.textContent = mono(t.title);
+        elArt.style.background = tint(t.url);
         bar.classList.add('show');
         setStatus('loading');
         markSource(t, gen);
+        paintFull();
         audio.src = t.url;
         var p = audio.play();
         // Surface real failures (network down, missing/unplayable file) instead of a frozen UI.
@@ -148,14 +461,15 @@
     }
 
     // Tell the user WHERE the audio is coming from, so "it's downloaded" is visible
-    // rather than assumed.
+    // rather than assumed. Shown as the pill in the full player.
     async function markSource(t, myGen) {
-        if (!elSrc) return;
-        elSrc.textContent = '';
+        var badge = $('npf-badge');
+        if (!badge) return;
         var onDevice = await cached(t.url);
-        if (myGen !== gen || !elSrc) return;
-        elSrc.textContent = onDevice ? '⤓ on this device' : (navigator.onLine ? '☁ streaming' : '☁ not saved offline');
-        elSrc.classList.toggle('off', onDevice);
+        if (myGen !== gen) return;
+        badge.textContent = onDevice ? 'Saved on this phone'
+            : (navigator.onLine ? 'Streaming — not saved' : 'Not saved on this phone');
+        badge.classList.toggle('on', onDevice);
     }
 
     // Watchdog: a track that has started loading but produced no playable audio within
@@ -214,9 +528,9 @@
         if (s !== 'loading') clearStall();
         if (!elPlay) return;
         elPlay.classList.toggle('loading', s === 'loading');
+        var pf = $('npf-play'); if (pf) pf.classList.toggle('loading', s === 'loading');
         if (s === 'error') {
-            elPlay.classList.remove('loading');
-            elPlay.textContent = '▶';
+            setGlyph('▶');
             note(msg || '⚠ Couldn’t play this track — tap ▶ to retry.');
         } else if (noteGen !== gen) {            // keep a note attached to THIS track
             elStatus.classList.remove('show');
@@ -257,8 +571,13 @@
         syncShuffle();
     }
     function syncShuffle() {
-        if (elShuffle) elShuffle.classList.toggle('on', shuffle);
-        document.querySelectorAll('[data-shuffle]').forEach(function (b) { b.classList.toggle('on', shuffle); });
+        var s = $('npf-shuffle'); if (s) s.classList.toggle('on', shuffle);
+        // A playlist's ⤮ lights up only while that playlist is the one playing.
+        document.querySelectorAll('[data-shuffle]').forEach(function (b) {
+            var card = b.closest('[data-pl-card]');
+            var mine = !card || (ctx && card.getAttribute('data-pl-card') === ctxId);
+            b.classList.toggle('on', shuffle && !!mine);
+        });
     }
 
     function setSession(t) {
@@ -270,10 +589,26 @@
         navigator.mediaSession.setActionHandler('previoustrack', prev);
     }
 
-    // Start a resolved playlist ({name, tracks}) at `atUrl` (or the top).
+    // Start a resolved playlist ({id, name, tracks}) at `atUrl` (or the top).
     function start(pl, atUrl) {
         var i = atUrl ? pl.tracks.findIndex(function (t) { return t.url === atUrl; }) : 0;
+        ctxId = pl.id || '';
         play(pl.tracks, i < 0 ? 0 : i, pl.name);
+        markCurrentCard();
+    }
+
+    // Highlight the playlist card that's playing.
+    function markCurrentCard() {
+        document.querySelectorAll('[data-pl-card]').forEach(function (c) {
+            c.classList.toggle('is-current', !!ctxId && c.getAttribute('data-pl-card') === ctxId);
+        });
+    }
+
+    // Resolve a playlist device-first (same order as playFromApi) without playing it.
+    function resolve(id) {
+        if (!window.ytdlOffline) return null;
+        var pl = ytdlOffline.get(id) || ytdlOffline.manifestPlaylist(id);
+        return (pl && pl.tracks && pl.tracks.length) ? pl : null;
     }
 
     // Resume where each track left off (keyed by its stable stream URL).
@@ -291,17 +626,14 @@
     }
     function forgetPos() { var t = cur(); if (t) localStorage.removeItem(posKey(t.url)); }
 
-    // Generic row highlighter: any page whose track rows carry [data-track-url] (and an
-    // optional .play-glyph) gets the playing row marked and its glyph flipped for free.
+    // Generic row highlighter: any page whose track rows carry [data-track-url] gets the
+    // playing row marked for free.
     document.addEventListener('ytdl:playing', function (e) {
-        var url = e.detail.url, playing = e.detail.playing;
-        document.querySelectorAll('[data-track-url]').forEach(function (el) {
-            var on = url && el.getAttribute('data-track-url') === url;
-            el.classList.toggle('playing', !!on);
-            var g = el.querySelector('.play-glyph');
-            if (g) g.textContent = (on && playing) ? '⏸' : '▶';
-            if (el.classList.contains('play-label')) el.textContent = (on && playing) ? '⏸ Pause' : '▶ Play';
+        var url = e.detail.url;
+        document.querySelectorAll('.trk[data-track-url]').forEach(function (el) {
+            el.classList.toggle('playing', !!url && el.getAttribute('data-track-url') === url);
         });
+        markCurrentCard();
     });
 
     window.ytdlPlayer = {
@@ -355,6 +687,18 @@
             var t = cur();
             if (t && t.url === url) toggle(); else this.playFromApi(id, url);
         },
+        // The ⤮ on a playlist card: turn shuffle on and start that playlist somewhere
+        // random. Device-first like everything else, so it works with no signal.
+        shufflePlaylist: function (id) {
+            var pl = resolve(id);
+            if (!pl) { this.playFromApi(id); return; }
+            shuffle = true;
+            localStorage.setItem('ytdl-shuffle', '1');
+            ctxId = pl.id || id;
+            play(pl.tracks, Math.floor(Math.random() * pl.tracks.length), pl.name);
+            markCurrentCard();
+        },
+        openFull: openFull,
         toggle: toggle, next: next, prev: prev,
         setShuffle: setShuffle, toggleShuffle: function () { setShuffle(!shuffle); },
         isShuffle: function () { return shuffle; },

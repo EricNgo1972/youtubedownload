@@ -1,648 +1,507 @@
+@import url('/fonts.css');
+
+/* ============================================================================
+   My Music — design system
+   Phone-shaped single column: header / scrolling view / mini player / tab bar.
+   Lime accent on near-black, Space Grotesk for anything that reads as a label
+   or a number, IBM Plex Sans for prose. Fonts are self-hosted (see fonts.css):
+   the app must render identically with no network.
+   ========================================================================== */
+
 :root {
-    --bg: #0f1220;
-    --panel: #1a1e33;
-    --panel-2: #222741;
-    --text: #e7e9f3;
-    --muted: #9aa0bd;
-    --accent: #ff3d54;
-    --accent-2: #4f7cff;
-    --ok: #34d399;
-    --border: #2c3252;
+    --bg: #06070A;          /* backdrop behind the phone column */
+    --surface: #0A0B0D;     /* the column itself */
+    --card: #101216;
+    --card-2: #14161B;      /* inputs */
+    --elev: #161A20;        /* mini player */
+    --btn: #191C22;         /* sheet rows */
+    --nav: #0C0E12;
+
+    --line: rgba(255, 255, 255, 0.07);
+    --line-2: rgba(255, 255, 255, 0.10);
+    --line-3: rgba(255, 255, 255, 0.16);
+
+    --text: #F2F1EE;
+    --text-2: #B9BDC6;
+    --muted: #8B8F98;
+    --muted-2: #6E737D;
+    --dim: #5C616B;
+    --dim-2: #4E535C;
+    --dim-3: #3E434C;
+
+    --accent: #C8F04A;
+    --accent-hi: #DCFF7A;
+    --accent-08: rgba(200, 240, 74, 0.08);
+    --accent-10: rgba(200, 240, 74, 0.10);
+    --accent-22: rgba(200, 240, 74, 0.22);
+    --accent-45: rgba(200, 240, 74, 0.45);
+    --on-accent: #0A0B0D;
+
+    --ok: #9FBF4A;
+    --danger: #FF8B7E;
+    --danger-bg: rgba(255, 107, 94, 0.16);
+
+    --display: 'Space Grotesk', system-ui, sans-serif;
+    --body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+    --safe-b: env(safe-area-inset-bottom, 0px);
 }
 
-* { box-sizing: border-box; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
-/* Blazor reconnect overlay (shown only while the circuit is down). */
-.reconnect-modal {
-    display: none;
-    position: fixed;
-    inset: 0;
-    z-index: 2000;
-    align-items: center;
-    justify-content: center;
-    background: rgba(8, 10, 20, 0.62);
+html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--text);
+    font-family: var(--body);
+    -webkit-font-smoothing: antialiased;
 }
-.reconnect-modal.components-reconnect-show,
-.reconnect-modal.components-reconnect-failed,
-.reconnect-modal.components-reconnect-rejected { display: flex; }
+body { overscroll-behavior-y: none; }
 
-.reconnect-box {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    background: #1a1e33;
-    border: 1px solid #2c3252;
-    border-radius: 12px;
-    padding: 16px 22px;
-    color: #e7e9f3;
-    font-weight: 600;
-}
-.reconnect-spinner {
-    width: 18px; height: 18px;
-    border: 3px solid #2c3252;
-    border-top-color: #ff3d54;
-    border-radius: 50%;
-    animation: ytdl-spin 1s linear infinite;
-}
-@keyframes ytdl-spin { to { transform: rotate(360deg); } }
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hi); }
+input, button, textarea { font-family: inherit; }
 
-body {
-    margin: 0;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background: var(--bg);
-    color: var(--text);
+@keyframes mmPulse { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+@keyframes mmUp    { from { transform: translateY(14px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
+@keyframes mmSheet { from { transform: translateY(100%) } to { transform: translateY(0) } }
+@keyframes mmSpin  { to { transform: rotate(360deg) } }
+
+/* ---------------------------------------------------------------- shell -- */
+
+.app {
+    position: relative;
+    width: 100%; max-width: 440px; margin: 0 auto;
+    height: 100dvh; display: flex; flex-direction: column;
+    background: var(--surface);
+    border-left: 1px solid var(--line); border-right: 1px solid var(--line);
+    overflow: hidden;
 }
 
-.page {
-    max-width: 820px;
-    margin: 0 auto;
-    /* Pad the sides by the notch/rounded-corner insets too (landscape / installed PWA). */
-    padding: 0 max(20px, env(safe-area-inset-right)) 60px max(20px, env(safe-area-inset-left));
+.app-head { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 14px 16px 10px; }
+.logo {
+    width: 30px; height: 30px; border-radius: 9px; flex: 0 0 auto;
+    background: var(--accent); color: var(--on-accent);
+    display: grid; place-items: center;
+    font-family: var(--display); font-weight: 700; font-size: 13px;
 }
+.head-main { flex: 1; min-width: 0; }
+.head-title { font-family: var(--display); font-weight: 700; font-size: 17px; letter-spacing: -.01em; line-height: 1.1; }
+.head-sub { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 11px; color: var(--muted); }
+.head-dot { width: 5px; height: 5px; border-radius: 999px; background: var(--accent); animation: mmPulse 2.4s ease-in-out infinite; flex: 0 0 auto; }
+body.no-circuit .head-dot { background: var(--muted); animation: none; }
 
-.topbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    /* Reserve the Dynamic Island / status-bar height when installed to the home screen,
-       so the brand + nav aren't hidden behind it. Falls back to 20px on non-notch devices. */
-    padding: calc(20px + env(safe-area-inset-top, 0px)) 0 20px;
-    margin-bottom: 12px;
-    border-bottom: 1px solid var(--border);
+.icon-btn {
+    width: 40px; height: 40px; flex: 0 0 auto;
+    border-radius: 12px; border: 0; cursor: pointer;
+    background: rgba(255, 255, 255, .06); color: var(--text-2); font-size: 15px;
 }
+.icon-btn:hover { color: var(--text); }
+.icon-btn.on { background: var(--accent-10); color: var(--accent); }
 
-.brand { font-weight: 700; font-size: 1.15rem; }
-
-.topbar nav { display: flex; gap: 8px; }
-
-.navlink {
-    color: var(--muted);
-    text-decoration: none;
-    padding: 8px 14px;
-    border-radius: 8px;
-    font-weight: 500;
+.search-wrap { flex: 0 0 auto; padding: 0 16px 10px; }
+.search-input, .text-input {
+    width: 100%; height: 44px; padding: 0 14px;
+    background: var(--card-2); border: 1px solid var(--line-2); border-radius: 12px;
+    color: var(--text); font-size: 15px; outline: 0;
 }
-.navlink:hover { background: var(--panel-2); color: var(--text); }
-.navlink.active { background: var(--accent); color: #fff; }
+.search-input:focus, .text-input:focus { border-color: var(--accent-45); }
+.search-input::placeholder, .text-input::placeholder { color: var(--dim); }
 
-/* Kebab toggle — hidden on wide screens, shown when the nav collapses. */
-.nav-kebab {
-    display: none;
-    background: none;
-    border: 0;
-    color: var(--text);
-    font-size: 1.5rem;
-    line-height: 1;
-    padding: 6px 12px;
-    cursor: pointer;
-    border-radius: 8px;
+.app-main { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 4px 12px 18px; }
+.app-main h1 { font-family: var(--display); font-size: 19px; font-weight: 700; letter-spacing: -.01em; margin: 6px 2px 12px; }
+.app-main h2, .subhead { font-family: var(--display); font-size: 15px; font-weight: 700; margin: 20px 2px 10px; }
+
+/* Tab bar. Three destinations, matching the three things you do: listen to a
+   list, find a track, add more. */
+.tabbar {
+    flex: 0 0 auto; display: flex; gap: 2px;
+    border-top: 1px solid var(--line); background: var(--nav);
+    padding: 6px 6px calc(10px + var(--safe-b));
 }
-.nav-kebab:hover { background: var(--panel-2); }
-.nav-scrim { display: none; }
-
-/* Phone: collapse the three links into a dropdown behind the hamburger. */
-@media (max-width: 640px) {
-    .topbar { position: relative; }
-    .nav-kebab { display: block; }
-
-    .topbar nav {
-        display: none;
-        position: absolute;
-        top: 100%;
-        right: 0;
-        flex-direction: column;
-        align-items: stretch;
-        gap: 4px;
-        min-width: 190px;
-        padding: 8px;
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
-        z-index: 60;
-    }
-    .topbar nav.open { display: flex; }
-    .topbar nav .navlink { padding: 12px 14px; }
-
-    /* Tap-outside-to-close backdrop. */
-    .nav-scrim {
-        display: block;
-        position: fixed;
-        inset: 0;
-        z-index: 50;
-    }
+.tab {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+    height: 54px; border: 0; border-radius: 12px; cursor: pointer;
+    background: transparent; color: var(--muted-2); text-decoration: none;
 }
+.tab:hover { color: var(--text-2); }
+.tab.active { background: var(--accent-08); color: var(--accent); }
+.tab.active:hover { color: var(--accent); }
+.tab-i { font-size: 16px; line-height: 1; }
+.tab-l { font-size: 10.5px; font-weight: 600; letter-spacing: .01em; }
 
-/* Inline, dismissible "install as app" card (see pwa-install.js; #pwa-slot in the layout). */
-.pwa-card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin: 10px 0 4px;
-    padding: 12px 14px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    font-size: 0.9rem;
-    color: var(--muted);
-    line-height: 1.45;
-}
-.pwa-card b { color: var(--text); font-weight: 600; }
-.pwa-card .pwa-btns { margin-left: auto; flex: none; display: flex; gap: 8px; align-items: center; }
-.pwa-card button { border: 0; border-radius: 9px; cursor: pointer; font-weight: 700; }
-.pwa-card .pwa-go { background: var(--ok); color: #052018; padding: 8px 14px; }
-.pwa-card .pwa-x { background: transparent; color: var(--muted); font-size: 1rem; padding: 6px 8px; }
-
-h1 { font-size: 1.5rem; margin: 18px 0; }
-
-.card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 20px;
-    margin-bottom: 18px;
-}
-
-.field-label { display: block; font-size: .85rem; color: var(--muted); margin-bottom: 6px; }
-
-.text-input {
-    width: 100%;
-    padding: 12px 14px;
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    background: var(--panel-2);
-    color: var(--text);
-    font-size: 1rem;
-}
-.text-input:focus { outline: none; border-color: var(--accent-2); }
-
-.formats { display: flex; flex-wrap: wrap; gap: 18px; margin: 18px 0; }
-.chk { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
-.chk input { width: 18px; height: 18px; accent-color: var(--accent); }
-
-.actions { display: flex; gap: 10px; }
+/* ------------------------------------------------------------- controls -- */
 
 .btn {
-    border: none;
-    border-radius: 10px;
-    padding: 11px 20px;
-    font-size: .95rem;
-    font-weight: 600;
-    cursor: pointer;
+    height: 46px; padding: 0 18px; border: 0; border-radius: 13px; cursor: pointer;
+    font-family: var(--display); font-weight: 700; font-size: 14px;
+    background: var(--accent); color: var(--on-accent);
 }
-.btn-primary { background: var(--accent); color: #fff; }
-.btn-primary:disabled { opacity: .5; cursor: not-allowed; }
-.btn-create { background: transparent; color: var(--ok); border: 1px solid var(--ok); }
-.btn-create:hover { background: rgba(52, 211, 153, 0.12); }
-.btn-create:disabled { opacity: .5; cursor: not-allowed; }
-.btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
-.btn-ghost:hover { color: var(--text); }
-
-.stage { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 10px; }
-.pct { color: var(--muted); }
-
-.bar { height: 10px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
-.fill { height: 100%; background: linear-gradient(90deg, var(--accent-2), var(--accent)); transition: width .2s ease; }
-
-.log { list-style: none; margin: 14px 0 0; padding: 0; font-size: .85rem; color: var(--muted); }
-.log li { padding: 3px 0; border-top: 1px solid var(--border); }
-
-.hint { color: var(--muted); font-size: .85rem; }
-.hint-warn { color: #fbbf24; margin-top: 10px; }
-
-.error { color: #fff; background: #7f1d2b; border-color: #a52a3a; }
-.success strong { color: var(--ok); }
-.files { margin: 10px 0; padding-left: 18px; }
-
-.row-between { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
-
-.playlist-opt {
-    margin-top: 4px;
-    margin-bottom: 18px;
-    padding: 12px 14px;
-    background: var(--panel-2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
+.btn:hover { background: var(--accent-hi); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn-ghost, .btn-mini {
+    border: 1px solid var(--line-2); background: transparent; color: var(--muted);
+    border-radius: 10px; cursor: pointer; font-family: var(--body); font-weight: 500;
 }
-
-.result-item {
-    padding: 10px 0;
-    border-top: 1px solid var(--border);
-    margin-top: 10px;
+.btn-ghost { height: 40px; padding: 0 14px; font-size: 13px; }
+.btn-mini { min-height: 34px; padding: 0 10px; font-size: 12.5px; }
+.btn-ghost:hover, .btn-mini:hover { color: var(--text); border-color: var(--line-3); }
+.btn-mini:disabled { opacity: .35; cursor: not-allowed; }
+.btn-dashed {
+    height: 46px; border-radius: 13px; border: 1px dashed var(--line-3);
+    background: transparent; color: var(--muted); font-size: 14px; font-weight: 500; cursor: pointer; width: 100%;
 }
-.result-title { font-weight: 600; margin-bottom: 4px; }
+.btn-dashed:hover { color: var(--text-2); border-color: var(--muted-2); }
+.btn-danger { background: var(--danger-bg); color: var(--danger); border: 0; height: 40px; padding: 0 14px; border-radius: 10px; cursor: pointer; font-size: 13px; }
 
-.subhead { font-size: 1.15rem; margin: 10px 0; }
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.header-actions { display: flex; gap: 8px; }
+.hint { font-size: 12.5px; color: var(--muted-2); line-height: 1.5; }
+.hint-warn { color: var(--accent); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; margin-bottom: 12px; }
+.eyebrow { font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted-2); font-weight: 600; }
 
-.job-head { display: flex; align-items: center; gap: 10px; }
-.job-stage { flex: 1; font-weight: 500; }
-.job .bar { margin-top: 12px; }
-.job-overall { margin-top: 12px; height: 6px; }
-.job-url { margin-top: 8px; word-break: break-all; }
-.job-error { margin-top: 8px; color: #fca5a5; font-size: .85rem; }
+/* ------------------------------------------------------- playlist cards -- */
 
-/* Playlist item list: one row per video, each with its own status + progress. */
-.job-items {
-    list-style: none;
-    margin: 14px 0 4px;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    counter-reset: ji;
+.pl-list { display: flex; flex-direction: column; gap: 10px; }
+.pl-card { border: 1px solid var(--line); border-radius: 16px; background: var(--card); overflow: hidden; }
+.pl-card.is-current { border-color: var(--accent-22); }
+
+.pl-head { display: flex; align-items: center; gap: 12px; padding: 14px; }
+.pl-id { flex: 1; min-width: 0; cursor: pointer; background: none; border: 0; padding: 0; text-align: left; color: inherit; }
+.pl-name-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pl-caret { font-size: 9px; color: var(--muted-2); width: 10px; flex: 0 0 auto; }
+.pl-name { display: block; min-width: 0; font-family: var(--display); font-size: 16px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-meta { display: block; margin-top: 4px; padding-left: 18px; font-size: 11.5px; color: var(--muted-2); }
+
+.pl-round {
+    width: 44px; height: 44px; flex: 0 0 auto; border-radius: 999px; cursor: pointer;
+    display: grid; place-items: center; font-size: 14px;
+    border: 0; background: var(--accent); color: var(--on-accent);
 }
-.job-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 10px 0;
-    border-top: 1px solid var(--border);
+.pl-round:hover { background: var(--accent-hi); }
+.pl-ghost {
+    width: 44px; height: 44px; flex: 0 0 auto; border-radius: 999px; cursor: pointer; font-size: 15px;
+    border: 1px solid var(--line-2); background: transparent; color: var(--text-2);
 }
-.job-item::before {
-    counter-increment: ji;
-    content: counter(ji);
-    color: var(--muted);
-    font-size: .78rem;
-    min-width: 1.6em;
-    text-align: right;
-    flex: 0 0 auto;
-    padding-top: 3px;
+.pl-ghost.on { border-color: var(--accent-45); color: var(--accent); }
+/* Download toggle states: ⬇ none / n-of-m partial / % busy / ✓ saved / ↻ stale. */
+.dl-toggle.saved { border-color: var(--accent-45); color: var(--accent); }
+.dl-toggle.partial { border-color: var(--accent-45); color: var(--accent); font-size: 11px; font-weight: 700; font-family: var(--display); }
+.dl-toggle.stale { border-color: #E3B341; color: #E3B341; }
+.dl-toggle.busy { border-color: var(--accent-45); color: var(--accent); font-size: 11px; font-weight: 700; font-family: var(--display); }
+
+.pl-body { border-top: 1px solid var(--line); padding: 6px 6px 8px; }
+.pl-foot { display: flex; gap: 8px; padding: 8px 8px 2px; }
+.pl-foot .btn-dashed { height: 40px; border-radius: 10px; font-size: 12.5px; }
+.pl-foot .btn-mini { height: 40px; border: 0; background: rgba(255, 255, 255, .05); }
+
+.empty { padding: 48px 20px; text-align: center; }
+.empty-t { font-family: var(--display); font-size: 17px; font-weight: 700; }
+.empty-s { margin-top: 8px; font-size: 13px; color: var(--muted); line-height: 1.5; }
+
+/* ----------------------------------------------------------- track rows -- */
+
+.trk { display: flex; align-items: center; gap: 2px; padding: 6px; border-radius: 12px; }
+.trk.playing { background: rgba(200, 240, 74, .05); }
+.trk-hit {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px;
+    cursor: pointer; background: none; border: 0; padding: 0; text-align: left; color: inherit;
 }
-.job-item .badge { flex: 0 0 auto; margin-top: 1px; }
-.job-item-main { flex: 1; min-width: 0; }
-.job-item-title { overflow-wrap: anywhere; line-height: 1.35; }
-.job-item-stage { color: var(--muted); font-size: .78rem; margin-top: 4px; }
-.job-item .bar { margin-top: 6px; height: 6px; }
-.job-item-ctl { display: flex; gap: 4px; flex: 0 0 auto; }
-.job-item-ctl .btn-mini { padding: 4px 9px; }
-
-.badge {
-    padding: 3px 10px;
-    border-radius: 999px;
-    font-size: .72rem;
-    font-weight: 700;
-    white-space: nowrap;
+.trk-art {
+    width: 42px; height: 42px; flex: 0 0 auto; border-radius: 9px;
+    display: grid; place-items: center;
+    font-family: var(--display); font-weight: 700; font-size: 12px; color: rgba(255, 255, 255, .85);
 }
-.badge-queued    { background: #374151; color: #cbd5e1; }
-.badge-running   { background: var(--accent-2); color: #fff; }
-.badge-completed { background: var(--ok); color: #063; }
-.badge-failed    { background: #7f1d2b; color: #fff; }
-.badge-cancelled { background: #4b5563; color: #e5e7eb; }
-.badge-skipped   { background: #3a2f52; color: #c4b5fd; }
-.badge-paused    { background: #4b3a12; color: #fcd34d; }
+/* These are <span>s because a <button> may only contain phrasing content — so each one
+   that truncates has to be made block-level explicitly, or ellipsis does nothing. */
+.trk-main { flex: 1; min-width: 0; }
+.trk-title { display: block; font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trk.playing .trk-title { font-weight: 600; color: var(--accent); }
+.trk-sub { display: flex; align-items: center; gap: 7px; margin-top: 2px; min-width: 0; }
+.trk-artist { display: block; font-size: 11.5px; color: var(--muted-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+.trk-dot { font-size: 11px; color: var(--dim-3); }
+/* Filled in from the Cache API — "is this on the phone" is client state. Doubles as the
+   progress readout while a single file is being saved. */
+.trk-off { font-size: 11px; font-weight: 600; white-space: nowrap; color: var(--muted); }
+.trk-off.on { color: var(--ok); }
+.trk-off.busy { color: var(--accent); animation: mmPulse 1.4s ease-in-out infinite; }
+.trk-dur { font-size: 11.5px; color: var(--dim); font-family: var(--display); flex: 0 0 auto; }
+.trk-more { width: 36px; height: 44px; flex: 0 0 auto; border-radius: 10px; border: 0; background: transparent; color: var(--muted-2); font-size: 16px; cursor: pointer; }
+.trk-more:hover { color: var(--text-2); background: rgba(255, 255, 255, .04); }
+.row-ops { display: none; }
 
-/* History: responsive card list (mobile-friendly, no table overflow). */
-.hist-list { display: flex; flex-direction: column; gap: 12px; }
+/* ------------------------------------------------------------- library -- */
 
-.hist-card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 16px;
+.chips { display: flex; gap: 7px; overflow-x: auto; padding: 2px 2px 12px; scrollbar-width: none; }
+.chips::-webkit-scrollbar { display: none; }
+.chip {
+    flex: 0 0 auto; height: 34px; padding: 0 14px; border-radius: 999px; cursor: pointer;
+    font-size: 12.5px; font-weight: 500;
+    border: 1px solid var(--line-2); background: transparent; color: var(--muted);
 }
+.chip.on { border-color: var(--accent-45); background: var(--accent-10); color: var(--accent); }
 
-.hist-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.storage { margin-top: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: var(--card); }
+.storage-bar { margin-top: 9px; height: 5px; border-radius: 999px; background: rgba(255, 255, 255, .09); overflow: hidden; }
+.storage-fill { height: 100%; border-radius: 999px; background: var(--accent); width: 0; transition: width .3s; }
+.storage-label { margin-top: 8px; font-size: 11.5px; color: var(--muted); }
+.build-stamp { color: var(--dim); font-size: 10.5px; font-family: var(--display); }
 
-.hist-title {
-    color: var(--text);
-    text-decoration: none;
-    font-weight: 600;
-    line-height: 1.35;
-    overflow-wrap: anywhere;   /* long titles wrap instead of overflowing */
-    flex: 1;
-    min-width: 0;
-}
-.hist-title:hover { color: var(--accent-2); }
+/* --------------------------------------------------------- mini player -- */
 
-.hist-top .btn-mini { flex: 0 0 auto; }
-
-.hist-meta {
-    margin-top: 6px;
-    color: var(--muted);
-    font-size: .82rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-}
-
-.hist-actions {
-    margin-top: 14px;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 10px;
-}
-
-.hist-files { display: flex; flex-wrap: wrap; gap: 6px; }
-
-/* Playlists */
-.pl-create { display: flex; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
-.pl-create .text-input { flex: 1; min-width: 180px; }
-
-.pl-name-btn {
-    background: none; border: none; color: var(--text);
-    font-size: 1.05rem; font-weight: 600; cursor: pointer;
-    text-align: left; padding: 0; flex: 1; min-width: 0; overflow-wrap: anywhere;
-}
-.pl-name-btn:hover { color: var(--accent-2); }
-
-.pl-head-right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
-
-.pl-detail { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 14px; }
-.pl-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
-
-.pl-items { list-style: none; margin: 0 0 16px; padding: 0; counter-reset: pl; }
-.pl-item {
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px 0; border-bottom: 1px solid var(--border);
-}
-.pl-item::before {
-    counter-increment: pl; content: counter(pl);
-    color: var(--muted); font-size: .8rem; min-width: 1.4em; flex: 0 0 auto;
-}
-/* ⤓ in front of a track whose audio is on this device. Fixed width whether or not it's
-   set, so titles stay aligned down the list. */
-.trk-off { flex: 0 0 auto; width: 1em; font-size: .95rem; color: var(--ok); line-height: 1; }
-.pl-item-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.pl-item-ctl { display: flex; gap: 4px; flex: 0 0 auto; }
-.pl-item-ctl .btn-mini { padding: 4px 8px; }
-
-.pl-add { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
-.pl-add-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; }
-.pl-add-title { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: .9rem; }
-
-.tag {
-    display: inline-block;
-    background: var(--panel-2);
-    border: 1px solid var(--border);
-    color: var(--muted);
-    border-radius: 6px;
-    padding: 2px 8px;
-    font-size: .72rem;
-    font-weight: 600;
-    margin-right: 4px;
-}
-
-.tag-link {
-    text-decoration: none;
-    margin-bottom: 4px;
-    cursor: pointer;
-}
-.tag-link:hover { border-color: var(--accent-2); color: var(--text); }
-
-.file-link {
-    color: var(--accent-2);
-    text-decoration: none;
-    font-weight: 600;
-}
-.file-link::before { content: "⬇ "; }
-.file-link:hover { text-decoration: underline; }
-
-.player {
-    display: block;
-    width: 100%;
-    max-width: 320px;
-    margin-top: 8px;
-    height: 36px;
-}
-
-.btn-play {
-    display: inline-block;
-    padding: 8px 16px;
-    border: none;
-    border-radius: 8px;
-    background: var(--accent-2);
-    color: #fff;
-    font-weight: 600;
-    font-size: .9rem;
-    cursor: pointer;
-}
-.btn-play:hover { filter: brightness(1.1); }
-
-.btn-shuffle {
-    display: inline-block;
-    padding: 8px 14px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: transparent;
-    color: var(--muted);
-    font-weight: 600;
-    font-size: .9rem;
-    cursor: pointer;
-}
-.btn-shuffle:hover { color: var(--text); border-color: var(--accent-2); }
-.btn-shuffle.on { border-color: var(--accent); color: var(--accent); background: rgba(255, 61, 84, 0.12); }
-
-.btn-mini {
-    padding: 5px 10px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: transparent;
-    color: var(--muted);
-    font-size: .78rem;
-    font-weight: 600;
-    cursor: pointer;
-    white-space: nowrap;
-}
-.btn-mini:hover { color: var(--text); border-color: var(--accent-2); }
-
-/* Compact "+" add button in the playlist header. */
-.pl-add-btn {
-    width: 32px;
-    padding: 0;
-    font-size: 1.35rem;
-    line-height: 1;
-    color: var(--text);
-    background: transparent;
-    border: none;
-}
-.pl-add-btn:hover { color: #fff; background: var(--panel-2); border: none; }
-
-/* "Add tracks" picker dialog. */
-.modal-scrim { position: fixed; inset: 0; z-index: 1700; background: rgba(8, 10, 20, 0.62); }
-.modal {
-    position: fixed;
-    z-index: 1701;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    width: min(560px, 94vw);
-    max-height: min(84vh, 720px);
-    display: flex;
-    flex-direction: column;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 18px;
-    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
-}
-.modal-head { display: flex; align-items: center; justify-content: space-between; font-weight: 700; font-size: 1.1rem; margin-bottom: 12px; }
-.modal .text-input { margin-bottom: 12px; }
-.modal-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; margin: 0 -6px; padding: 0 6px; }
-.pick-row { display: flex; align-items: center; gap: 12px; padding: 10px 8px; border-radius: 9px; cursor: pointer; }
-.pick-row:hover { background: var(--panel-2); }
-.pick-row.picked { background: rgba(79, 124, 255, 0.16); }
-.pick-row input[type=checkbox] { width: 18px; height: 18px; flex: none; accent-color: var(--accent-2); }
-.pick-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.pick-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pick-auth { font-size: 0.78rem; color: var(--muted); }
-.modal-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
-.modal-foot-btns { display: flex; gap: 8px; }
-.modal-sm { max-height: none; }
-.confirm-text { margin: 0; color: var(--muted); line-height: 1.55; }
-
-/* Danger buttons: solid for a confirmed action, ghost for the trigger. */
-.btn-danger { background: var(--accent); color: #fff; }
-.btn-danger:hover { filter: brightness(1.08); }
-.btn-danger-ghost { color: var(--accent); border-color: var(--accent); background: transparent; }
-.btn-danger-ghost:hover { color: #fff; background: var(--accent); border-color: var(--accent); }
-
-.pl-detail-foot { margin-top: 18px; display: flex; justify-content: space-between; gap: 8px; }
-
-/* Remove-track "✕" button — red glyph, fills red on hover. */
-.btn-x { color: var(--accent); }
-.btn-x:hover { color: #fff; background: var(--accent); border-color: var(--accent); }
-
-/* Play-track "▶" button — green glyph, fills green on hover. */
-.btn-p { color: var(--ok); }
-.btn-p:hover { color: #fff; background: var(--ok); border-color: var(--ok); }
-
-/* Per-playlist download toggle in the header (driven by playlist-offline.js). */
-.dl-toggle { color: var(--muted); min-width: 34px; }
-.dl-toggle.saved { color: var(--ok); border-color: var(--ok); }
-.dl-toggle.stale { color: #e3b341; border-color: #e3b341; }
-.dl-toggle.busy { color: var(--accent-2); border-color: var(--accent-2); }
-
-/* A track row / play button marked as currently playing by the shared player. */
-.pl-item.playing .pl-item-title { color: var(--ok); font-weight: 600; }
-.btn-play.playing { background: var(--ok); }
-
-/* Shared "now playing" bar, injected on every page by player.js. */
-.np-bar {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 800;
-    display: none;
-    background: var(--panel);
-    border-top: 1px solid var(--border);
-    padding: 10px max(16px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
-    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.32);
-}
+#np-slot { flex: 0 0 auto; }
+.np-bar { display: none; margin: 0 10px 6px; border-radius: 14px; background: var(--elev); border: 1px solid var(--line); overflow: hidden; }
 .np-bar.show { display: block; }
-.np-meta { max-width: 760px; margin: 0 auto 6px; }
-.np-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.np-artist { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.np-ctl { max-width: 760px; margin: 0 auto; display: flex; align-items: center; justify-content: center; gap: 22px; }
-.np-ctl button { background: none; border: 0; color: var(--text); font-size: 25px; cursor: pointer; line-height: 1; }
-.np-play { position: relative; width: 54px; height: 54px; border-radius: 50%; background: var(--ok) !important; color: #052018 !important;
-           display: flex; align-items: center; justify-content: center; }
-/* Buffering: hide the glyph, show a spinner so play never looks frozen. */
-.np-play.loading { color: transparent !important; }
-.np-play.loading::after {
-    content: ''; position: absolute; width: 22px; height: 22px;
-    border: 3px solid rgba(5, 32, 24, 0.35); border-top-color: #052018;
-    border-radius: 50%; animation: ytdl-spin 0.8s linear infinite;
+.np-prog { height: 2px; background: rgba(255, 255, 255, .08); }
+.np-prog-fill { height: 100%; width: 0; background: var(--accent); }
+.np-row { display: flex; align-items: center; gap: 11px; padding: 9px 10px; }
+.np-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; cursor: pointer; background: none; border: 0; padding: 0; text-align: left; color: inherit; }
+.np-art { width: 42px; height: 42px; flex: 0 0 auto; border-radius: 10px; display: grid; place-items: center; font-family: var(--display); font-weight: 700; font-size: 12px; color: rgba(255, 255, 255, .85); background: #1B1F26; }
+.np-meta { display: block; min-width: 0; flex: 1; }
+.np-title { display: block; font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-sub { display: block; font-size: 11.5px; color: var(--muted-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.np-play {
+    position: relative; width: 44px; height: 44px; flex: 0 0 auto;
+    border-radius: 999px; border: 0; cursor: pointer;
+    background: var(--accent); color: var(--on-accent); font-size: 14px;
+    display: grid; place-items: center;
 }
-.np-status { display: none; font-size: 12px; color: var(--accent); margin-top: 3px; }
+.np-play.loading { color: transparent; }
+.np-play.loading::after {
+    content: ''; position: absolute; width: 18px; height: 18px;
+    border: 2.5px solid rgba(10, 11, 13, .3); border-top-color: var(--on-accent);
+    border-radius: 50%; animation: mmSpin .8s linear infinite;
+}
+.np-skip { width: 40px; height: 44px; flex: 0 0 auto; border: 0; border-radius: 10px; background: transparent; color: var(--text-2); font-size: 13px; cursor: pointer; }
+.np-status { display: none; font-size: 11.5px; color: var(--danger); padding: 0 12px 9px; line-height: 1.4; }
 .np-status.show { display: block; }
-/* Where this track's audio is coming from — makes "it's downloaded" visible, so a
-   pause to buffer is never mistaken for the device ignoring its own copy. */
-.np-src { font-size: 11px; color: var(--muted); margin-top: 2px; letter-spacing: .01em; }
-.np-src.off { color: var(--ok); }
-.np-toggle { font-size: 19px; opacity: .45; }
-.np-toggle.on { opacity: 1; color: var(--ok); }
-body.has-np .page { padding-bottom: 140px; }
 
-/* Transient toast (e.g. "Link copied"), sits above the now-playing bar. */
+/* ---------------------------------------------------------- now playing -- */
+
+.np-full {
+    position: absolute; inset: 0; z-index: 60; display: none;
+    flex-direction: column; padding: 16px 20px calc(22px + var(--safe-b));
+    background: var(--surface);
+}
+.np-full.show { display: flex; animation: mmUp .24s cubic-bezier(.2, .8, .2, 1); }
+.npf-head { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+/* One line, always: playlist names run long (an audiobook title is a paragraph) and
+   wrapping here steals height from the lyrics. */
+.npf-from {
+    flex: 1; min-width: 0; text-align: center;
+    font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted-2); font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.npf-body { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 22px; min-height: 0; overflow: hidden; }
+.npf-art {
+    flex: 1 1 auto; min-height: 0; max-width: 100%; aspect-ratio: 1; margin: 0 auto;
+    border-radius: 22px; display: grid; place-items: center;
+    font-family: var(--display); font-weight: 700; font-size: 52px; color: rgba(255, 255, 255, .9);
+    background: #1B1F26;
+}
+/* Lyrics / karaoke. The active line is filled left-to-right in the accent colour by
+   clipping a gradient to the text, so the wipe tracks playback position exactly. */
+.npf-tab {
+    height: 40px; padding: 0 12px; flex: 0 0 auto;
+    border: 0; border-radius: 12px; cursor: pointer;
+    font-size: 12px; font-weight: 600;
+    background: rgba(255, 255, 255, .06); color: var(--text-2);
+}
+.npf-tab.on { background: var(--accent-10); color: var(--accent); }
+.npf-lyrics { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 2px; scrollbar-width: none; }
+.npf-lyrics::-webkit-scrollbar { display: none; }
+.npf-lyr {
+    padding: 11px 6px; border-radius: 10px; cursor: pointer;
+    font-size: 18px; font-weight: 500; line-height: 1.35; color: var(--muted);
+}
+.npf-lyr:hover { background: rgba(255, 255, 255, .03); }
+.npf-lyr.on {
+    font-family: var(--display); font-size: 23px; font-weight: 700;
+    letter-spacing: -.01em; line-height: 1.3;
+    /* background-image is set per-frame by the player; clipping it to the glyphs is what
+       produces the wipe. No background-color here — it would tint the text too. */
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+/* [hidden] must beat the display rules these elements carry. */
+.npf-art[hidden], .npf-lyrics[hidden] { display: none; }
+/* Language chooser — only rendered when a track ships more than one subtitle file.
+   Sticky so it stays reachable while the words scroll under it. */
+.npf-lyr-langs {
+    position: sticky; top: 0; z-index: 2;
+    display: flex; gap: 6px; flex-wrap: wrap;
+    padding: 2px 4px 8px; margin-bottom: 4px;
+    background: linear-gradient(var(--surface) 70%, transparent);
+}
+.npf-lang {
+    height: 28px; padding: 0 10px; border-radius: 999px; cursor: pointer;
+    font-size: 11.5px; font-weight: 600;
+    border: 1px solid var(--line-2); background: transparent; color: var(--muted);
+}
+.npf-lang.on { border-color: var(--accent-45); background: var(--accent-10); color: var(--accent); }
+
+.npf-lyr-msg { padding: 40px 12px; text-align: center; color: var(--muted-2); font-size: 13px; }
+.npf-lyr-empty { padding: 40px 12px; text-align: center; }
+.npf-lyr-t { font-family: var(--display); font-size: 16px; font-weight: 700; }
+.npf-lyr-s { margin-top: 8px; font-size: 13px; color: var(--muted); line-height: 1.5; }
+
+/* A track whose lyrics are available, marked in the list. */
+.trk-lrc {
+    font-size: 10px; font-weight: 700; letter-spacing: .04em; color: var(--muted);
+    border: 1px solid var(--line-3); border-radius: 5px; padding: 1px 4px; white-space: nowrap; flex: 0 0 auto;
+}
+
+.npf-meta { flex: 0 0 auto; }
+.npf-title { font-family: var(--display); font-size: 22px; font-weight: 700; letter-spacing: -.01em; line-height: 1.2; }
+.npf-artist { margin-top: 6px; font-size: 14px; color: var(--muted); }
+.npf-badge {
+    margin-top: 12px; display: inline-block; font-size: 11.5px; font-weight: 600;
+    padding: 5px 10px; border-radius: 999px;
+    color: var(--muted); background: rgba(255, 255, 255, .06);
+}
+.npf-badge.on { color: var(--accent); background: var(--accent-10); }
+.npf-seek { height: 18px; display: flex; align-items: center; cursor: pointer; }
+.npf-track { width: 100%; height: 5px; border-radius: 999px; background: rgba(255, 255, 255, .11); overflow: hidden; }
+.npf-fill { height: 100%; width: 0; border-radius: 999px; background: var(--accent); }
+.npf-times { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted-2); font-family: var(--display); }
+.npf-ctl { display: flex; align-items: center; justify-content: space-between; }
+.npf-ctl button { border: 0; background: transparent; cursor: pointer; color: var(--text); }
+.npf-side { width: 44px; height: 44px; border-radius: 12px; font-size: 16px; color: var(--dim-2) !important; }
+.npf-side.on { color: var(--accent) !important; }
+.npf-step { width: 52px; height: 52px; border-radius: 14px; font-size: 15px; color: #E7E6E2 !important; }
+.npf-play {
+    position: relative; width: 68px; height: 68px; border-radius: 999px; font-size: 19px;
+    background: var(--accent) !important; color: var(--on-accent) !important;
+    display: grid; place-items: center;
+}
+.npf-play.loading { color: transparent !important; }
+.npf-play.loading::after {
+    content: ''; position: absolute; width: 26px; height: 26px;
+    border: 3px solid rgba(10, 11, 13, .3); border-top-color: var(--on-accent);
+    border-radius: 50%; animation: mmSpin .8s linear infinite;
+}
+
+/* -------------------------------------------------------------- sheet -- */
+
+.sheet-scrim { position: absolute; inset: 0; z-index: 50; display: none; align-items: flex-end; background: rgba(4, 5, 7, .7); }
+.sheet-scrim.show { display: flex; }
+.sheet {
+    width: 100%; max-height: 78%; overflow-y: auto;
+    background: var(--card-2); border-top: 1px solid var(--line-2);
+    border-top-left-radius: 20px; border-top-right-radius: 20px;
+    padding: 14px 12px calc(18px + var(--safe-b));
+    animation: mmSheet .22s cubic-bezier(.2, .8, .2, 1);
+}
+.sheet-grip { width: 38px; height: 4px; border-radius: 999px; background: var(--line-3); margin: 0 auto 12px; }
+.sheet-head { padding: 0 6px 12px; }
+.sheet-title { font-family: var(--display); font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sheet-sub { margin-top: 3px; font-size: 12px; color: var(--muted-2); }
+.sheet-items { display: flex; flex-direction: column; gap: 4px; }
+.sheet-btn {
+    display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 12px;
+    border-radius: 12px; border: 0; background: var(--btn); color: var(--text);
+    font-size: 14px; cursor: pointer; text-align: left; width: 100%;
+}
+.sheet-btn:hover { background: #1F232B; }
+.sheet-btn.danger { background: rgba(255, 107, 94, .12); color: var(--danger); }
+.sheet-glyph { width: 22px; text-align: center; font-size: 13px; opacity: .85; flex: 0 0 auto; }
+.sheet-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet-meta { font-size: 11.5px; color: var(--muted-2); flex: 0 0 auto; }
+
+/* --------------------------------------------------------- add / jobs -- */
+
+.dl-intro { font-size: 13px; color: var(--muted); line-height: 1.5; margin-bottom: 16px; }
+.formats { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 12px; }
+.chk { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; font-size: 12.5px; color: var(--muted); }
+.chk input { accent-color: var(--accent); width: 16px; height: 16px; }
+.playlist-opt { margin-top: 12px; font-size: 12.5px; color: var(--muted); }
+.actions { margin-top: 14px; }
+.actions .btn { width: 100%; }
+
+.job { background: var(--card); border: 1px solid var(--line); border-radius: 13px; padding: 13px 14px; margin-bottom: 9px; }
+.job-head { display: flex; align-items: center; gap: 10px; }
+.job-stage { flex: 1; min-width: 0; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.badge { font-size: 11.5px; font-weight: 600; color: var(--muted); font-family: var(--display); flex: 0 0 auto; }
+.badge-completed { color: var(--accent); }
+.badge-failed, .badge-cancelled { color: var(--danger); }
+.badge-running { color: var(--text-2); }
+.bar { margin-top: 9px; height: 4px; border-radius: 999px; background: rgba(255, 255, 255, .09); overflow: hidden; }
+.bar .fill { height: 100%; border-radius: 999px; background: var(--accent); }
+.job-items { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+.job-item { display: flex; align-items: flex-start; gap: 9px; }
+.job-item-main { flex: 1; min-width: 0; }
+.job-item-title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job-item-stage { margin-top: 3px; font-size: 11.5px; color: var(--muted-2); }
+.job-item-ctl { display: flex; gap: 4px; flex: 0 0 auto; }
+.job-item-ctl .btn-mini { min-height: 30px; padding: 0 8px; }
+.job-url { margin-top: 9px; word-break: break-all; font-size: 11px; color: var(--dim); }
+.job-error { margin-top: 8px; font-size: 12px; color: var(--danger); }
+.file-link, .file-link-plain { font-size: 12.5px; }
+
+/* ------------------------------------------------------------- modals -- */
+
+.modal-scrim { position: absolute; inset: 0; z-index: 70; background: rgba(4, 5, 7, .7); }
+.modal {
+    position: absolute; z-index: 71; left: 12px; right: 12px; bottom: 12px; max-height: 82%;
+    display: flex; flex-direction: column;
+    background: var(--card-2); border: 1px solid var(--line-2); border-radius: 18px;
+    padding: 16px 14px calc(16px + var(--safe-b));
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-family: var(--display); font-weight: 700; font-size: 15px; margin-bottom: 12px; }
+.modal-list { flex: 1; min-height: 0; overflow-y: auto; margin: 12px -4px; }
+.modal-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; }
+.modal-foot-btns { display: flex; gap: 8px; }
+.confirm-text { font-size: 13.5px; color: var(--muted); line-height: 1.55; margin: 0 0 4px; }
+.pick-row { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-radius: 10px; cursor: pointer; }
+.pick-row.picked { background: var(--accent-08); }
+.pick-row input { accent-color: var(--accent); width: 17px; height: 17px; flex: 0 0 auto; }
+.pick-main { flex: 1; min-width: 0; }
+.pick-title { display: block; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pick-auth { display: block; font-size: 11.5px; color: var(--muted-2); margin-top: 2px; }
+.src-badge { font-size: 10px; font-weight: 700; letter-spacing: .04em; color: var(--muted); border: 1px solid var(--line-2); border-radius: 5px; padding: 2px 5px; flex: 0 0 auto; }
+.src-upload { color: var(--accent); border-color: var(--accent-45); }
+
+/* --------------------------------------------------------------- misc -- */
+
+/* Offline / no-circuit: playing is untouched, only server-backed controls go quiet. */
+.offline-banner {
+    background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 12px; padding: 10px 14px; margin-bottom: 12px;
+    font-size: 12px; color: var(--muted); line-height: 1.5;
+}
+.offline-banner b { color: var(--text); }
+body.no-circuit .needs-circuit { opacity: .32; pointer-events: none; }
+
+.add-track-sources { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.add-source { flex: 1; min-width: 150px; display: flex; flex-direction: column; gap: 4px; padding: 14px; border: 1px dashed var(--line-3); border-radius: 13px; cursor: pointer; }
+.add-source:hover { border-color: var(--muted-2); }
+.add-source-title { font-size: 13.5px; font-weight: 600; }
+.field-label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+.file-input { font-size: 12px; color: var(--muted-2); margin-top: 6px; }
+.upload-progress { margin-top: 14px; }
+.upload-progress-head { display: flex; justify-content: space-between; gap: 10px; }
+.tag, .tag-link { display: inline-block; font-size: 10.5px; font-weight: 600; color: var(--muted); border: 1px solid var(--line-2); border-radius: 6px; padding: 3px 7px; margin: 6px 5px 0 0; }
+.tag-link:hover { color: var(--accent); border-color: var(--accent-45); }
+.hist-files { display: flex; flex-wrap: wrap; }
+
 .ytdl-toast {
-    position: fixed;
-    left: 50%;
-    bottom: calc(96px + env(safe-area-inset-bottom, 0px));
-    transform: translateX(-50%) translateY(8px);
-    z-index: 2100;
-    background: var(--panel-2);
-    color: var(--text);
-    border: 1px solid var(--border);
-    padding: 10px 16px;
-    border-radius: 10px;
-    font-size: 0.9rem;
-    font-weight: 600;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-    opacity: 0;
-    transition: opacity 0.25s, transform 0.25s;
-    pointer-events: none;
+    position: absolute; left: 50%; bottom: 90px; transform: translateX(-50%) translateY(8px);
+    z-index: 80; background: var(--btn); color: var(--text); border: 1px solid var(--line-2);
+    padding: 10px 16px; border-radius: 11px; font-size: 13px; font-weight: 600;
+    opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none;
 }
 .ytdl-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-/* Offline / no-circuit mode. Playing is untouched; only the server-backed controls
-   (create, add, reorder, rename, delete, Library) go quiet, so the page never offers an
-   action that would silently do nothing. */
-.offline-banner {
-    background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--accent-2);
-    border-radius: 10px; padding: 10px 14px; margin-bottom: 14px;
-    font-size: .85rem; color: var(--muted); line-height: 1.5;
-}
-.offline-banner b { color: var(--text); }
-body.no-circuit .needs-circuit { opacity: .35; pointer-events: none; }
+.pwa-card { display: flex; align-items: center; gap: 10px; background: var(--card); border: 1px solid var(--line); border-radius: 13px; padding: 12px 14px; margin-bottom: 12px; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.pwa-card b { color: var(--text); font-weight: 600; }
+.pwa-card .pwa-btns { margin-left: auto; flex: none; display: flex; gap: 8px; align-items: center; }
+.pwa-card button { border: 0; border-radius: 9px; cursor: pointer; font-weight: 700; }
+.pwa-card .pwa-go { background: var(--accent); color: var(--on-accent); padding: 8px 14px; }
+.pwa-card .pwa-x { background: transparent; color: var(--muted-2); font-size: 1rem; padding: 6px 8px; }
 
-.header-actions { display: flex; gap: 8px; }
-
-/* Library: "add a track" sources (upload / from YouTube) */
-.add-track-sources {
-    display: flex;
-    gap: 12px;
-    margin-top: 6px;
-    flex-wrap: wrap;
-}
-.add-source {
-    flex: 1;
-    min-width: 200px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 14px;
-    background: var(--panel-2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    cursor: pointer;
-    text-decoration: none;
-    color: var(--text);
-}
-.add-source:hover { border-color: var(--accent-2); }
-.add-source-title { font-weight: 600; }
-.add-source .file-input { margin-top: 6px; font-size: .82rem; color: var(--muted); }
-.add-source .file-input::file-selector-button {
-    margin-right: 10px;
-    padding: 6px 12px;
-    border: none;
-    border-radius: 8px;
-    background: var(--accent-2);
-    color: #fff;
-    font-weight: 600;
-    cursor: pointer;
-}
-
-/* Source badge (YouTube vs Upload) */
-.src-badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 999px;
-    font-size: .68rem;
-    font-weight: 700;
-    letter-spacing: .02em;
-    text-transform: uppercase;
-    flex: 0 0 auto;
-}
-.src-youtube { background: rgba(255, 61, 84, .16); color: #ff8a99; }
-.src-upload  { background: rgba(79, 124, 255, .18); color: #a9bcff; }
-
-.hist-title-wrap { flex: 1; min-width: 0; }
-
-.file-link-plain { color: var(--accent-2); text-decoration: none; font-weight: 600; }
-.file-link-plain:hover { text-decoration: underline; }
-
-.upload-progress { margin-top: 14px; }
-.upload-progress-head {
-    display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 6px;
-}
+.reconnect-modal { display: none; position: absolute; inset: 0; z-index: 90; align-items: center; justify-content: center; background: rgba(4, 5, 7, .8); }
+.reconnect-modal.components-reconnect-show,
+.reconnect-modal.components-reconnect-failed,
+.reconnect-modal.components-reconnect-rejected { display: flex; }
+.reconnect-box { display: flex; align-items: center; gap: 10px; background: var(--card-2); border: 1px solid var(--line-2); border-radius: 13px; padding: 14px 18px; font-size: 13.5px; }
+.reconnect-spinner { width: 15px; height: 15px; border: 2px solid var(--line-3); border-top-color: var(--accent); border-radius: 50%; animation: mmSpin .8s linear infinite; }

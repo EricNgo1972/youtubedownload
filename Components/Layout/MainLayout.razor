@@ -1,19 +1,48 @@
 @inherits LayoutComponentBase
+@using Microsoft.AspNetCore.Components.Routing
 
-<div class="page">
-    <header class="topbar">
-        <span class="brand">🎵 My Music</span>
-        <button class="nav-kebab" aria-label="Menu" onclick="ytdlNav.toggle(event)">⋮</button>
-        @* No separate "Downloads" destination: a playlist being on the device is a
-           property shown on the playlist itself (⬇/✓), not another page. *@
-        <nav>
-            <NavLink class="navlink" href="" Match="NavLinkMatch.All">Playlists</NavLink>
-            <NavLink class="navlink needs-circuit" href="library">Library</NavLink>
-        </nav>
+@* Phone-shaped shell: header / scrolling view / mini player / tab bar. Everything
+   outside @Body renders statically (no render mode reaches the layout), so it is all
+   plain JS — which is also what keeps it alive with no SignalR circuit. *@
+<div class="app">
+    <header class="app-head">
+        <div class="logo">MM</div>
+        <div class="head-main">
+            @* Set by ui.js from the path: derived client-side so it's correct even when
+               the page came from the service worker cache with no circuit. *@
+            <div class="head-title" id="view-title">My Music</div>
+            <div class="head-sub">
+                <span class="head-dot"></span>
+                <span id="offline-count">Checking this phone…</span>
+            </div>
+        </div>
+        <button class="icon-btn" id="btn-search" aria-label="Search" onclick="ytdlUI.toggleSearch()">⌕</button>
     </header>
-    <main>
+
+    <div class="search-wrap" id="search-wrap" hidden>
+        <input class="search-input" id="search-input" type="search" placeholder="Search your tracks"
+               autocomplete="off" oninput="ytdlUI.onQuery(this.value)" />
+    </div>
+
+    <main class="app-main" id="app-main">
         <div id="offline-banner" class="offline-banner" hidden></div>
         <div id="pwa-slot"></div>
         @Body
     </main>
+
+    @* player.js mounts the mini player here so it sits above the tab bar rather than
+       floating over the content. *@
+    <div id="np-slot"></div>
+
+    <nav class="tabbar">
+        <NavLink class="tab" href="" Match="NavLinkMatch.All">
+            <span class="tab-i">≡</span><span class="tab-l">Playlists</span>
+        </NavLink>
+        <NavLink class="tab" href="library">
+            <span class="tab-i">♪</span><span class="tab-l">Library</span>
+        </NavLink>
+        <NavLink class="tab needs-circuit" href="download">
+            <span class="tab-i">↓</span><span class="tab-l">Add</span>
+        </NavLink>
+    </nav>
 </div>

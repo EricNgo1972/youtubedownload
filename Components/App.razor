@@ -4,13 +4,18 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <base href="/" />
-    <link rel="stylesheet" href="app.css" />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%AC%87%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+    @* Every local asset carries the build token. A CDN keys its cache on the whole URL,
+       so a new build requests URLs the edge has never seen — stale JavaScript cannot be
+       served no matter what TTL sits in front of the app. *@
+    <link rel="stylesheet" href="app.css?v=@BuildInfo.Version" />
+    <link rel="icon" href="icon.svg" />
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="apple-touch-icon" href="icon.svg" />
-    <meta name="theme-color" content="#0f1115" />
+    <meta name="theme-color" content="#06070A" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <title>YouTube Downloader</title>
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="My Music" />
+    <title>My Music</title>
     <HeadOutlet />
 </head>
 <body>
@@ -23,18 +28,32 @@
     @* Register the service worker FIRST and inline: it is what makes this page work
        offline at all, so it must not queue behind blazor.web.js. *@
     <script>
-        if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(function () { });
+        if ('serviceWorker' in navigator) {
+            // Whether this page was already being served by a worker. If it was, and a NEW
+            // worker then takes over, the scripts running right now came from the old
+            // cache — reload once so the update actually applies. Without this, an update
+            // needs two visits and the app silently runs last week's code in between.
+            var hadController = !!navigator.serviceWorker.controller;
+            // The worker URL is versioned too — otherwise the one file that controls
+            // every cache is itself the one an edge cache can pin to an old copy.
+            navigator.serviceWorker.register('/sw.js?v=@BuildInfo.Version').catch(function () { });
+            navigator.serviceWorker.addEventListener('controllerchange', function () {
+                if (!hadController || window.__ytdlReloaded) return;   // first install: nothing stale
+                window.__ytdlReloaded = true;
+                location.reload();
+            });
+        }
     </script>
 
     @* blazor.web.js is parser-blocking, so everything the offline player needs is
        loaded BEFORE it. With no circuit the service worker serves an empty stub for it
        and the page still works — but only if these have already run. *@
-    <script src="offline-store.js"></script>
-    <script src="player.js"></script>
-    <script src="playlist-offline.js"></script>
-    <script src="share.js"></script>
-    <script src="nav.js"></script>
-    <script src="pwa-install.js"></script>
+    <script src="offline-store.js?v=@BuildInfo.Version"></script>
+    <script src="ui.js?v=@BuildInfo.Version"></script>
+    <script src="player.js?v=@BuildInfo.Version"></script>
+    <script src="playlist-offline.js?v=@BuildInfo.Version"></script>
+    <script src="share.js?v=@BuildInfo.Version"></script>
+    <script src="pwa-install.js?v=@BuildInfo.Version"></script>
 
     <script src="_framework/blazor.web.js"></script>
     <script src="reconnect.js"></script>

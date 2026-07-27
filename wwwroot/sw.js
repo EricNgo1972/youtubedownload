@@ -17,10 +17,11 @@
 // no link: plain fetch() has no timeout, so without deadlines the app sits waiting on
 // requests the network will never answer.
 
-const VERSION = 'v25';
+const VERSION = 'v40';
 const SHELL = `ytdl-shell-${VERSION}`;
 const PAGE = 'ytdl-page';             // unversioned: last-good HTML survives shell upgrades
 const MEDIA = 'ytdl-media';           // unversioned: saved audio survives shell upgrades
+const CHUNKS = 'ytdl-chunks';         // pieces of large files, plus their metadata
 const API = 'ytdl-api';               // unversioned for the same reason
 
 const API_PATH = '/api/playlists';
@@ -34,20 +35,50 @@ const JS_MS = 4000;                   // blazor.web.js: see serveBlazor()
 const SHELL_ASSETS = [
   '/offline.html',
   '/offline-store.js',
+  '/ui.js',
   '/player.js',
   '/playlist-offline.js',
   '/share.js',
-  '/nav.js',
   '/reconnect.js',
   '/pwa-install.js',
   '/app.css',
+  '/fonts.css',
   '/icon.svg',
   '/manifest.webmanifest',
+  // Self-hosted faces. Precached with the shell so type renders identically offline
+  // rather than falling back to a system font mid-trip.
+  '/fonts/space-grotesk-500-latin.woff2',
+  '/fonts/space-grotesk-500-latin-ext.woff2',
+  '/fonts/space-grotesk-500-vietnamese.woff2',
+  '/fonts/space-grotesk-700-latin.woff2',
+  '/fonts/space-grotesk-700-latin-ext.woff2',
+  '/fonts/space-grotesk-700-vietnamese.woff2',
+  '/fonts/ibm-plex-sans-400-latin.woff2',
+  '/fonts/ibm-plex-sans-400-latin-ext.woff2',
+  '/fonts/ibm-plex-sans-400-vietnamese.woff2',
+  '/fonts/ibm-plex-sans-500-latin.woff2',
+  '/fonts/ibm-plex-sans-500-latin-ext.woff2',
+  '/fonts/ibm-plex-sans-500-vietnamese.woff2',
+  '/fonts/ibm-plex-sans-600-latin.woff2',
+  '/fonts/ibm-plex-sans-600-latin-ext.woff2',
+  '/fonts/ibm-plex-sans-600-vietnamese.woff2',
 ];
+
+// The build token this worker was registered with (/sw.js?v=abc123). Appending it to the
+// precache URLs defeats any CDN in front of the app: the edge has never seen these exact
+// URLs for a new build, so it cannot hand back a previous deploy's files.
+const BUILD = new URL(self.location.href).searchParams.get('v') || '';
+const versioned = (u) => (BUILD ? u + '?v=' + BUILD : u);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(SHELL).then((c) => c.addAll(SHELL_ASSETS)).then(() => self.skipWaiting())
+    caches.open(SHELL)
+      // cache:'reload' is essential, not a nicety. A plain addAll() is allowed to satisfy
+      // itself from the browser's HTTP cache, so bumping VERSION would build a brand-new
+      // shell out of STALE files — the app would look updated while still running old
+      // code, and no amount of restarting would fix it. This forces the network.
+      .then((c) => c.addAll(SHELL_ASSETS.map((u) => new Request(versioned(u), { cache: 'reload' }))))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -73,6 +104,9 @@ self.addEventListener('fetch', (event) => {
   if (isMedia(url)) { event.respondWith(serveMedia(request)); return; }
   if (isShell(url)) { event.respondWith(cacheFirst(request, SHELL)); return; }
   if (url.pathname === API_PATH) { event.respondWith(serveApi(request)); return; }
+  // Lyrics are immutable for a given track, so cache-first: instant, and available with
+  // no signal once the track has been saved.
+  if (url.pathname.startsWith('/api/lyrics/')) { event.respondWith(cacheFirst(request, CHUNKS, false)); return; }
   if (url.pathname === BLAZOR_JS) { event.respondWith(serveBlazor(request)); return; }
   if (request.mode === 'navigate') { event.respondWith(serveNavigation(request)); return; }
   // Everything else (the live Blazor circuit) — leave to the network.
@@ -86,9 +120,12 @@ function fetchWithin(request, ms) {
   return fetch(request, { signal: ctl.signal }).finally(() => clearTimeout(timer));
 }
 
-async function cacheFirst(request, cacheName) {
+// ignoreSearch defaults to true for shell assets, whose ?v= build token must not create
+// a cache miss. It MUST be false where the query selects content — lyrics use ?t= to pick
+// a language, and ignoring it would hand back whichever track was fetched first.
+async function cacheFirst(request, cacheName, ignoreSearch = true) {
   const cache = await caches.open(cacheName);
-  const hit = await cache.match(request, { ignoreSearch: true });
+  const hit = await cache.match(request, { ignoreSearch });
   if (hit) return hit;
   try {
     const res = await fetch(request);
@@ -150,6 +187,67 @@ async function serveBlazor(request) {
   }
 }
 
+// --- chunked media ----------------------------------------------------------------
+// A several-hundred-MB audiobook is stored as ~8 MB pieces so its download can survive a
+// dropped connection (see offline-store.js). Playback must not know or care: we answer
+// each range request by slicing only the pieces it actually overlaps. Blob.slice() and
+// multi-part Blob construction are both lazy, so a 64 KB seek reads 64 KB — never the
+// whole book. Key shapes are duplicated from offline-store.js because a service worker
+// cannot import the page's modules.
+const chunkKey = (url, i) => `/__chunk__?u=${encodeURIComponent(url)}&i=${i}`;
+const metaKey = (url) => `/__chunkmeta__?u=${encodeURIComponent(url)}`;
+
+async function serveFromChunks(request) {
+  let cache, meta;
+  try {
+    cache = await caches.open(CHUNKS);
+    const metaRes = await cache.match(metaKey(request.url));
+    if (!metaRes) return null;
+    meta = await metaRes.json();
+  } catch (e) { return null; }
+  if (!meta || !meta.have || !meta.have.every(Boolean)) return null;   // still downloading
+
+  const size = meta.size, cs = meta.chunkSize;
+  const range = request.headers.get('range');
+  let start = 0, end = size - 1;
+  if (range) {
+    const m = /bytes=(\d+)-(\d*)/.exec(range);
+    start = m ? Number(m[1]) : 0;
+    end = m && m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
+  }
+  if (start >= size || start > end) {
+    return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}` } });
+  }
+
+  const parts = [];
+  for (let i = Math.floor(start / cs); i <= Math.floor(end / cs); i++) {
+    const r = await cache.match(chunkKey(meta.url, i));
+    if (!r) return null;                       // a piece went missing — let the caller retry
+    const b = await r.blob();
+    const base = i * cs;
+    const from = Math.max(0, start - base);
+    const to = Math.min(b.size, end - base + 1);
+    parts.push(from === 0 && to === b.size ? b : b.slice(from, to));
+  }
+  const body = parts.length === 1 ? parts[0] : new Blob(parts, { type: meta.type });
+
+  if (!range) {
+    return new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': meta.type, 'Content-Length': String(size), 'Accept-Ranges': 'bytes' },
+    });
+  }
+  return new Response(body, {
+    status: 206,
+    headers: {
+      'Content-Range': `bytes ${start}-${end}/${size}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': String(body.size),
+      'Content-Type': meta.type,
+    },
+  });
+}
+
 // Last resort: never seen a page on this device, and no network to fetch one.
 const OFFLINE_HTML = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>My Music — offline</title>
@@ -165,6 +263,11 @@ async function serveMedia(request) {
   const cache = await caches.open(MEDIA);
   const cached = await cache.match(request.url);
   if (!cached) {
+    // Large files are stored in pieces so their download can resume; reassemble them
+    // here, transparently to <audio>.
+    const chunked = await serveFromChunks(request);
+    if (chunked) return chunked;
+
     // Not saved for offline — try the network (works when online), else fail cleanly.
     // Bounded: <audio> gives no feedback while a request hangs, so a stuck stream must
     // become a real error the player can report and skip past.
@@ -175,24 +278,28 @@ async function serveMedia(request) {
   const range = request.headers.get('range');
   if (!range) return cached;
 
-  const buf = await cached.arrayBuffer();
-  const size = buf.byteLength;
+  // Slice via Blob, NOT arrayBuffer(). arrayBuffer() would pull the whole file into
+  // memory on every single range request — and a seek in a several-hundred-MB audiobook
+  // fires a lot of them, which is enough to kill the worker. Blob.slice() is lazy: it
+  // references the stored bytes and streams them from disk.
+  const blob = await cached.blob();
+  const size = blob.size;
   const m = /bytes=(\d+)-(\d*)/.exec(range);
   const start = m ? Number(m[1]) : 0;
   const end = m && m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
-  if (start >= size) {
+  if (start >= size || start > end) {
     return new Response(null, {
       status: 416,
       headers: { 'Content-Range': `bytes */${size}` },
     });
   }
-  const chunk = buf.slice(start, end + 1);
+  const chunk = blob.slice(start, end + 1);
   return new Response(chunk, {
     status: 206,
     headers: {
       'Content-Range': `bytes ${start}-${end}/${size}`,
       'Accept-Ranges': 'bytes',
-      'Content-Length': String(chunk.byteLength),
+      'Content-Length': String(chunk.size),
       'Content-Type': cached.headers.get('Content-Type') || 'audio/mpeg',
     },
   });

@@ -18,7 +18,8 @@ function ytdlToast(msg) {
     var t = document.createElement('div');
     t.className = 'ytdl-toast';
     t.textContent = msg;
-    document.body.appendChild(t);
+    // Inside the phone column: the toast is absolutely positioned against it.
+    (document.querySelector('.app') || document.body).appendChild(t);
     requestAnimationFrame(function () { t.classList.add('show'); });
     setTimeout(function () {
         t.classList.remove('show');

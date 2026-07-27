@@ -7,96 +7,100 @@
 
 <PageTitle>Playlists</PageTitle>
 
-<div class="row-between">
-    <h1>Playlists</h1>
-    <button class="btn btn-create needs-circuit" @onclick="OpenCreateDialog">+ New list</button>
-</div>
+<div class="pl-list">
+    <button class="btn-dashed needs-circuit" @onclick="OpenCreateDialog">+ New playlist</button>
 
-@if (_playlists.Count == 0)
-{
-    <div class="card hint">No playlists yet. Create one above, then add tracks from your <a class="file-link-plain" href="library">Library</a> — upload your own audio or download from YouTube.</div>
-}
-else
-{
-    <div class="hist-list">
-        @foreach (var pl in _playlists)
-        {
-            <div class="hist-card">
-                <div class="hist-top">
-                    @* Expand/collapse runs in plain JS, not @@onclick: with a weak or dead
-                       SignalR circuit the Blazor handler never fires, which would leave the
-                       ▶ buttons unreachable even for playlists saved on the device. *@
-                    <button class="pl-name-btn" onclick="ytdlPl.toggle('@pl.Id')">
-                        <span class="pl-caret" data-pl-caret="@pl.Id">▸</span> @pl.Name
-                    </button>
-                    <span class="pl-head-right">
-                        <span class="hint">@pl.RecordIds.Count track(s)</span>
-                        <button class="btn-mini dl-toggle" data-download-id="@pl.Id"
-                                onclick="ytdlDownloadToggle('@pl.Id')" title="Download for offline">⬇</button>
-                        <button class="btn-mini pl-add-btn needs-circuit" title="Add tracks" aria-label="Add tracks"
-                                @onclick="() => OpenAddDialog(pl.Id)">+</button>
+    @foreach (var pl in _playlists)
+    {
+        var items = Resolve(pl);
+        <section class="pl-card" data-pl-card="@pl.Id">
+            <div class="pl-head">
+                @* Expand/collapse runs in plain JS, not @@onclick: with a weak or dead
+                   SignalR circuit the Blazor handler never fires, which would leave the
+                   ▶ controls unreachable even for playlists saved on the device. *@
+                <button class="pl-id" onclick="ytdlPl.toggle('@pl.Id')">
+                    <span class="pl-name-row">
+                        <span class="pl-caret" data-pl-caret="@pl.Id">▶</span>
+                        <span class="pl-name">@pl.Name</span>
                     </span>
-                </div>
+                    <span class="pl-meta">@Meta(items)</span>
+                </button>
 
-                @{
-                    var items = Resolve(pl);
-                    var playable = items.Count(i => i.AudioIndex >= 0);
+                @* The download toggle keeps its own state machine (⬇ / % / ✓ / ↻); it is
+                   painted from the Cache API by playlist-offline.js. *@
+                <button class="pl-ghost dl-toggle" data-download-id="@pl.Id"
+                        onclick="ytdlDownloadToggle('@pl.Id')" title="Download for offline">⬇</button>
+                <button class="pl-ghost" data-shuffle title="Shuffle"
+                        onclick="ytdlPlayer.shufflePlaylist('@pl.Id')">⤮</button>
+                <button class="pl-round" title="Play all"
+                        onclick="ytdlPlayer.playFromApi('@pl.Id')">▶</button>
+            </div>
+
+            @* Always rendered (hidden by JS until expanded) so the play controls exist in
+               the DOM without a server round-trip. *@
+            <div class="pl-body" data-pl-detail="@pl.Id" hidden>
+                @if (items.Count == 0)
+                {
+                    <div class="hint" style="padding:22px 12px;text-align:center">Empty — add tracks from your library.</div>
                 }
-                @* Always rendered (hidden by JS until expanded) so the play controls exist
-                   in the DOM without a server round-trip. *@
-                <div class="pl-detail" data-pl-detail="@pl.Id" hidden>
-                    @if (playable > 0)
-                    {
-                        <div class="pl-actions">
-                            <button class="btn-play" onclick="ytdlPlayer.playFromApi('@pl.Id')">▶ Play all (@playable)</button>
-                            <button class="btn-shuffle" data-shuffle onclick="ytdlPlayer.toggleShuffle()">🔀 Shuffle</button>
-                            <span class="hint">auto-advancing; 🔀 plays in random order</span>
-                        </div>
-                    }
+                @for (var idx = 0; idx < items.Count; idx++)
+                {
+                    var it = items[idx];
+                    var trackUrl = it.AudioIndex >= 0 ? $"/stream/{it.RecordId}/{it.AudioIndex}" : null;
+                    <div class="trk" data-track-url="@trackUrl" data-title="@it.Title"
+                         data-artist="@Artist(it.Author)" data-list="@pl.Id" data-list-name="@pl.Name">
+                        <button class="trk-hit" onclick="ytdlPlayer.tapTrack('@trackUrl', '@pl.Id')"
+                                disabled="@(trackUrl is null)">
+                            <span class="trk-art" style="background:@Tint(it.RecordId)">@Mono(it.Title)</span>
+                            <span class="trk-main">
+                                <span class="trk-title">@it.Title</span>
+                                <span class="trk-sub">
+                                    @if (Artist(it.Author) is { Length: > 0 } a)
+                                    {
+                                        <span class="trk-artist">@a</span>
+                                        <span class="trk-dot">·</span>
+                                    }
+                                    @* Filled in from the Cache API — whether the audio is on
+                                       THIS device is client state the server can't know. *@
+                                    <span class="trk-off" data-off-for="@trackUrl">…</span>
+                                    @if (it.HasLyrics)
+                                    {
+                                        <span class="trk-lrc" title="Lyrics available">LRC</span>
+                                    }
+                                </span>
+                            </span>
+                            <span class="trk-dur">@it.Duration</span>
+                        </button>
+                        <button class="trk-more" aria-label="More" onclick="ytdlUI.sheet(this)">⋯</button>
 
-                    @if (items.Count == 0)
-                    {
-                        <div class="hint">Empty — add tracks from the list below.</div>
-                    }
-                    else
-                    {
-                        <ol class="pl-items">
-                            @for (var idx = 0; idx < items.Count; idx++)
-                            {
-                                var it = items[idx];
-                                var trackUrl = it.AudioIndex >= 0 ? $"/stream/{it.RecordId}/{it.AudioIndex}" : null;
-                                <li class="pl-item" data-track-url="@trackUrl">
-                                    @* Filled in by playlist-offline.js from the Cache API — whether
-                                       the audio is on THIS device is client state the server can't know. *@
-                                    <span class="trk-off" data-off-for="@trackUrl" aria-hidden="true"></span>
-                                    <span class="pl-item-title">@it.Title</span>
-                                    <span class="pl-item-ctl">
-                                        @if (it.AudioIndex >= 0)
-                                        {
-                                            <button class="btn-mini btn-p play-glyph" title="Play"
-                                                    onclick="ytdlPlayer.tapTrack('@trackUrl', '@pl.Id')">▶</button>
-                                        }
-                                        <button class="btn-mini needs-circuit" title="Move up"
-                                                @onclick="() => Move(pl.Id, it.RecordId, -1)" disabled="@(idx == 0)">▲</button>
-                                        <button class="btn-mini needs-circuit" title="Move down"
-                                                @onclick="() => Move(pl.Id, it.RecordId, 1)" disabled="@(idx == items.Count - 1)">▼</button>
-                                        <button class="btn-mini btn-x needs-circuit" title="Remove"
-                                                @onclick="() => Remove(pl.Id, it.RecordId)">✕</button>
-                                    </span>
-                                </li>
-                            }
-                        </ol>
-                    }
-
-                    <div class="pl-detail-foot">
-                        <button class="btn-mini needs-circuit" @onclick="() => OpenRenameDialog(pl.Id)">✏️ Rename</button>
-                        <button class="btn-mini btn-danger-ghost needs-circuit" @onclick="() => AskDelete(pl.Id)">🗑️ Delete playlist</button>
+                        @* Server-side operations. Hidden, and driven by the sheet clicking
+                           them: that keeps every edit a real Blazor @@onclick while the UI
+                           follows the design's single ⋯ affordance. *@
+                        <span class="row-ops">
+                            <button class="op-up" @onclick="() => Move(pl.Id, it.RecordId, -1)" disabled="@(idx == 0)"></button>
+                            <button class="op-down" @onclick="() => Move(pl.Id, it.RecordId, 1)" disabled="@(idx == items.Count - 1)"></button>
+                            <button class="op-remove" @onclick="() => Remove(pl.Id, it.RecordId)"></button>
+                        </span>
                     </div>
+                }
+
+                <div class="pl-foot">
+                    <button class="btn-dashed needs-circuit" @onclick="() => OpenAddDialog(pl.Id)">+ Add tracks</button>
+                    <button class="btn-mini needs-circuit" @onclick="() => OpenRenameDialog(pl.Id)">Rename</button>
+                    <button class="btn-mini needs-circuit" @onclick="() => AskDelete(pl.Id)">Delete</button>
                 </div>
             </div>
-        }
-    </div>
-}
+        </section>
+    }
+
+    @if (_playlists.Count == 0)
+    {
+        <div class="empty">
+            <div class="empty-t">No playlists yet</div>
+            <div class="empty-s">Group the tracks you keep on this phone so they are one tap away with no signal.</div>
+        </div>
+    }
+</div>
 
 @if (_addDialogPlaylistId is not null)
 {
@@ -147,7 +151,7 @@ else
             <span class="hint">@_selected.Count selected</span>
             <div class="modal-foot-btns">
                 <button class="btn-mini" @onclick="CloseAddDialog">Cancel</button>
-                <button class="btn btn-primary" @onclick="AddSelected" disabled="@(_selected.Count == 0)">Add @_selected.Count</button>
+                <button class="btn" @onclick="AddSelected" disabled="@(_selected.Count == 0)">Add @_selected.Count</button>
             </div>
         </div>
     </div>
@@ -164,7 +168,7 @@ else
             <span></span>
             <div class="modal-foot-btns">
                 <button class="btn-mini" @onclick="CloseCreateDialog">Cancel</button>
-                <button class="btn btn-create" @onclick="Create"
+                <button class="btn" @onclick="Create"
                         disabled="@string.IsNullOrWhiteSpace(_newName)">Create</button>
             </div>
         </div>
@@ -182,7 +186,7 @@ else
             <span></span>
             <div class="modal-foot-btns">
                 <button class="btn-mini" @onclick="CloseRenameDialog">Cancel</button>
-                <button class="btn btn-create" @onclick="ConfirmRename"
+                <button class="btn" @onclick="ConfirmRename"
                         disabled="@string.IsNullOrWhiteSpace(_renameName)">Save</button>
             </div>
         </div>
@@ -203,7 +207,7 @@ else
             <span></span>
             <div class="modal-foot-btns">
                 <button class="btn-mini" @onclick="CancelDelete">Cancel</button>
-                <button class="btn btn-danger" @onclick="ConfirmDelete">Delete</button>
+                <button class="btn-danger" @onclick="ConfirmDelete">Delete</button>
             </div>
         </div>
     </div>
@@ -229,7 +233,11 @@ else
 
     protected override void OnInitialized() => _playlists = Store.All();
 
-    private sealed record Item(string RecordId, string Title, string Author, int AudioIndex);
+    private sealed record Item(string RecordId, string Title, string Author, int AudioIndex,
+                               string RawDuration, bool HasLyrics)
+    {
+        public string Duration => TrackVisuals.Duration(RawDuration);
+    }
 
     private List<Item> Resolve(Playlist pl)
     {
@@ -238,11 +246,17 @@ else
         {
             var rec = History.Get(rid);
             list.Add(rec is null
-                ? new Item(rid, "(removed from history)", "", -1)
-                : new Item(rid, rec.Title, rec.Author, FirstAudioIndex(rec)));
+                ? new Item(rid, "(removed from library)", "", -1, "", false)
+                : new Item(rid, rec.Title, rec.Author, FirstAudioIndex(rec), rec.Duration, LyricsService.Has(rec)));
         }
         return list;
     }
+
+    // Presentation helpers (shared with the Library view) — see TrackVisuals.
+    private static string Meta(List<Item> items) => TrackVisuals.Meta(items.Count, items.Select(i => i.RawDuration));
+    private static string Artist(string? author) => TrackVisuals.Artist(author);
+    private static string Tint(string id) => TrackVisuals.Tint(id);
+    private static string Mono(string title) => TrackVisuals.Mono(title);
 
     private void OpenAddDialog(string plId)
     {

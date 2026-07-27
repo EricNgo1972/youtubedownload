@@ -39,7 +39,15 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<DownloadJobService
 
 var app = builder.Build();
 
-app.UseStaticFiles();
+// The service worker is this app's cache layer, so the browser's own HTTP cache must not
+// hold stale copies of the very files the worker precaches — that is how a phone ends up
+// running last week's JavaScript. "no-cache" still allows ETag revalidation (a 304 costs
+// nothing), it just forbids serving without asking.
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+        ctx.Context.Response.Headers.CacheControl = "no-cache, must-revalidate",
+});
 app.UseAntiforgery();
 
 app.MapRazorComponents<App>()
@@ -47,7 +55,7 @@ app.MapRazorComponents<App>()
 
 // Liveness endpoints for the fleet health checks + the release workflow's verify step.
 app.MapGet("/health", () => Results.Text("OK"));
-app.MapGet("/api/health", () => Results.Json(new { status = "ok", service = "youtubedownloader" }));
+app.MapGet("/api/health", () => Results.Json(new { status = "ok", service = "youtubedownloader", build = BuildInfo.Stamp }));
 
 // Serve a downloaded file by history id + index. Referencing files by record id
 // — rather than an arbitrary path — avoids path traversal.
@@ -79,12 +87,38 @@ app.MapGet("/api/playlists", (PlaylistService playlists, HistoryService history)
             {
                 url = $"/stream/{x.rid}/{x.idx}",
                 title = x.rec.Title,
-                author = x.rec.Author,
-                duration = x.rec.Duration,
+                // Blanked for uploads, where "Uploaded" is a placeholder rather than an
+                // artist — it would otherwise show as the artist in the player and on
+                // the lock screen.
+                author = TrackVisuals.Artist(x.rec.Author),
+                duration = TrackVisuals.Duration(x.rec.Duration),
+                lyrics = LyricsService.Has(x.rec),
             })
             .ToList(),
     });
     return Results.Json(result);
+});
+
+// Timed lyrics for the karaoke view, parsed from the subtitle file downloaded with the
+// track. Immutable for a given record, so the service worker caches it outright and it
+// is prefetched when a track is saved for offline.
+// `t` selects which subtitle track (a video often ships several languages); the full
+// list is returned every time so the client can offer the choice.
+app.MapGet("/api/lyrics/{id}", (string id, int? t, HistoryService history) =>
+{
+    var rec = history.Get(id);
+    if (rec is null) return Results.NotFound();
+    var subs = LyricsService.List(rec);
+    var idx = subs.Count == 0 ? 0 : Math.Clamp(t ?? 0, 0, subs.Count - 1);
+    var lines = LyricsService.Load(rec, idx);
+    return Results.Json(new
+    {
+        id,
+        selected = idx,
+        tracks = subs.Select(s => new { i = s.Index, lang = s.Lang, label = s.Label }),
+        count = lines.Count,
+        lines = lines.Select(l => new { t = l.T, text = l.Text }),
+    });
 });
 
 // A shareable "listen" page for a single track: a self-contained player anyone can open

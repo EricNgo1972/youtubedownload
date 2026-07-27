@@ -4,18 +4,26 @@
 @inject HistoryService History
 @implements IAsyncDisposable
 
-<PageTitle>Download</PageTitle>
+<PageTitle>Add music</PageTitle>
 
-<h1>Download</h1>
+@* Two distinct steps, and conflating them misleads: this page fetches from YouTube onto
+   the SERVER's library. Getting audio onto the phone is a second, separate action on the
+   track itself (⋯ → Save to this phone). *@
+<div class="dl-intro">
+    Step 1 — fetch a link into your library. The download runs on the server, so you can
+    lock your phone and it keeps going.
+    <br /><br />
+    Step 2 — open <a href="library">Library</a> and use ⋯ → <b>Save to this phone</b> on
+    anything you want offline (or ⬇ on a whole playlist).
+</div>
 
 <div class="card">
-    <label class="field-label" for="url">YouTube video or playlist URL</label>
-    <input id="url" class="text-input" placeholder="https://www.youtube.com/watch?v=… or /playlist?list=…"
+    <input id="url" class="text-input" placeholder="Paste a video or playlist link"
            value="@_url" @oninput="OnUrlInput" />
 
     @if (_alreadyDownloaded)
     {
-        <div class="hint hint-warn">✓ You've already downloaded this video (see Library).</div>
+        <div class="hint hint-warn" style="margin-top:10px">✓ Already in your library.</div>
     }
 
     <div class="formats">
@@ -41,20 +49,20 @@
     }
 
     <div class="actions">
-        <button class="btn btn-primary" @onclick="Enqueue" disabled="@(!CanStart)">Start download</button>
+        <button class="btn" @onclick="Enqueue" disabled="@(!CanStart)">Fetch to library</button>
     </div>
     <div class="hint" style="margin-top:10px">
-        Downloads run on the server — you can close this tab or lock your phone and they keep going.
+        Tip: leave <b>Subtitles</b> on — that's what the karaoke lyrics view reads.
     </div>
 </div>
 
 @if (_jobs.Count > 0)
 {
     <div class="row-between">
-        <h2 class="subhead">Downloads</h2>
+        <div class="eyebrow" style="margin-top:22px">Queue</div>
         @if (_jobs.Any(j => !j.IsActive))
         {
-            <button class="btn btn-ghost" @onclick="ClearFinished">Clear finished</button>
+            <button class="btn-mini" @onclick="ClearFinished">Clear finished</button>
         }
     </div>
 
