@@ -10,7 +10,23 @@
 // audio trips a watchdog instead of spinning forever. On a weak-but-connected link
 // (one bar on a mountain) an unbounded fetch can hang for minutes — that is what made
 // the app look frozen even though the file was sitting in the cache.
+//
+// UI STATE RULE: the DOM is a projection of the player's state, never a place state is
+// kept. Everything visible — the marked row, the highlighted playlist card, the bar and
+// its contents, the play glyph — is written by repaint(), which reads the current queue
+// and re-applies it to whatever DOM exists right now. It is idempotent and safe to call
+// at any time, and a MutationObserver calls it after every change to the page.
+//
+// This replaces an event-driven scheme that painted the rows once, at the moment the
+// audio started, and never again. It looked correct until a navigation replaced those
+// rows: the new ones had never been told anything, so the app appeared to lose track of
+// what was playing while the audio carried on.
 (function () {
+    // One player, or none. A second copy of this script — an enhanced navigation that
+    // re-executes the tag — would build a second queue and a second <audio> while the
+    // first carried on playing, and window.ytdlPlayer would point at the silent one.
+    if (window.ytdlPlayer) return;
+
     var audio, bar, full, elTitle, elArtist, elPlay, elStatus, elArt;
     var status = '';  // '' | 'loading' | 'ok' | 'error'
     var queue = [];   // live play order (already shuffled when shuffle is on)
@@ -42,11 +58,21 @@
     function shuf(a) { for (var k = a.length - 1; k > 0; k--) { var r = Math.floor(Math.random() * (k + 1)); var t = a[k]; a[k] = a[r]; a[r] = t; } return a; }
     function cur() { return (idx >= 0 && queue[idx]) ? queue[idx] : null; }
 
-    // --- the mini bar + full-screen now playing (injected once, persist across nav) ---
+    // --- the mini bar + full-screen now playing (created once, re-attached as needed) ---
     // The mini bar mounts into #np-slot so it sits between the scrolling view and the tab
     // bar; the full player is absolutely positioned over the whole app column.
+    //
+    // NEITHER is part of the server's markup, so a Blazor re-render or an enhanced
+    // navigation sweeps them out of the document. We therefore keep our own references
+    // and put the SAME nodes back rather than rebuilding: the <audio> inside the bar is
+    // what is actually playing, and a fresh one would leave the old, detached element
+    // playing on forever with no way to reach it. That detached state is also invisible
+    // from the outside — document.body still takes the .has-np class, so the "Playing"
+    // tab appears while the bar it refers to is no longer on the page.
+    var barEl = null, fullEl = null;
+
     function injectBar() {
-        if (!document.getElementById('ytdl-bar')) {
+        if (!barEl) {
             var el = document.createElement('div');
             el.id = 'ytdl-bar';
             el.className = 'np-bar';
@@ -63,9 +89,14 @@
                 '</div>' +
                 '<div class="np-status" id="np-status"></div>' +
                 '<audio id="np-audio" preload="none"></audio>';
-            (document.getElementById('np-slot') || document.body).appendChild(el);
+            barEl = el;
         }
-        if (!document.getElementById('ytdl-npf')) {
+        // Re-attach rather than recreate. Moving a playing <audio> element within the
+        // document does not interrupt it, so the track carries on across a re-render.
+        var slot = document.getElementById('np-slot') || document.body;
+        if (barEl.parentNode !== slot) slot.appendChild(barEl);
+
+        if (!fullEl) {
             var f = document.createElement('div');
             f.id = 'ytdl-npf';
             f.className = 'np-full';
@@ -95,22 +126,49 @@
                     '<button class="npf-side" id="npf-repeat" aria-label="Repeat">↻</button>' +
                   '</div>' +
                 '</div>';
-            (document.querySelector('.app') || document.body).appendChild(f);
+            fullEl = f;
         }
+        var host = document.querySelector('.app') || document.body;
+        if (fullEl.parentNode !== host) host.appendChild(fullEl);
+
         bind();
+    }
+
+    // The page changing under us is normal, not exceptional: Blazor re-renders a list,
+    // an enhanced navigation swaps the whole view. Both can detach the player and both
+    // bring in rows that know nothing about what is playing. So after any change we put
+    // the player back if needed and re-project the state onto the new DOM.
+    //
+    // Debounced, and repaint() only ever writes values it just derived, so the mutations
+    // it causes settle immediately instead of feeding back.
+    var healTimer = null;
+    function watchMount() {
+        if (typeof MutationObserver === 'undefined') return;
+        new MutationObserver(function () {
+            clearTimeout(healTimer);
+            healTimer = setTimeout(heal, 60);
+        }).observe(document.body, { childList: true, subtree: true });
+    }
+    function heal() {
+        if (barEl && fullEl && (!document.contains(barEl) || !document.contains(fullEl))) injectBar();
+        repaint();
     }
 
     function $(id) { return document.getElementById(id); }
 
     function bind() {
-        bar = $('ytdl-bar');
-        audio = $('np-audio');
-        elTitle = $('np-title');
-        elArtist = $('np-sub');
-        elPlay = $('np-play');
-        elStatus = $('np-status');
-        elArt = $('np-art');
-        full = $('ytdl-npf');
+        // Resolved from the nodes we own, NOT getElementById: while they are detached
+        // (mid re-render) a document lookup returns null and every reference here would
+        // silently become null — which is precisely how the bar went missing while the
+        // audio kept playing.
+        bar = barEl;
+        audio = barEl.querySelector('#np-audio');
+        elTitle = barEl.querySelector('#np-title');
+        elArtist = barEl.querySelector('#np-sub');
+        elPlay = barEl.querySelector('#np-play');
+        elStatus = barEl.querySelector('#np-status');
+        elArt = barEl.querySelector('#np-art');
+        full = fullEl;
         if (audio._ytdlBound) { syncShuffle(); return; }
         audio._ytdlBound = true;
 
@@ -342,7 +400,9 @@
 
     // --- full-screen player -------------------------------------------------------
     function openFull() { if (!cur()) return; full.classList.add('show'); paintFull(); }
-    function closeFull() { full.classList.remove('show'); }
+    // Coming out of the full player, the bar reappears for its 10 seconds — a reminder
+    // of what is still playing, then gone again.
+    function closeFull() { full.classList.remove('show'); showBar(); }
 
     function paintFull() {
         var t = cur(); if (!t || !full) return;
@@ -406,10 +466,56 @@
     }
 
     // Tell the current page which track is playing so it can highlight the row.
+    // The mini bar is a glance, not furniture: it appears when something changes and gets
+    // out of the way after BAR_MS. Nothing is lost by letting it go — the "Playing" tab is
+    // the permanent way back, and it stays for as long as a track is loaded.
+    var BAR_MS = 10000;
+    var barTimer = null;
+
+    function showBar() {
+        if (!bar) return;
+        bar.classList.add('show');
+        clearTimeout(barTimer);
+        barTimer = setTimeout(function () { if (bar) bar.classList.remove('show'); }, BAR_MS);
+    }
+    function hideBar() {
+        clearTimeout(barTimer);
+        if (bar) bar.classList.remove('show');
+    }
+
+    /// Write the whole of the current playback state onto whatever DOM is present.
+    /// Idempotent and cheap; call it whenever either side might have changed.
+    function repaint() {
+        var t = cur();
+        var url = t ? t.url : null;
+
+        // Rows and playlist cards on the page as it is NOW — after a re-render these are
+        // different elements from the ones that were marked when playback started.
+        document.querySelectorAll('.trk[data-track-url]').forEach(function (el) {
+            el.classList.toggle('playing', !!url && el.getAttribute('data-track-url') === url);
+        });
+        markCurrentCard();
+
+        // Independent of the bar's own visibility: this is what keeps the "Playing" tab
+        // available after the bar has slipped away.
+        document.body.classList.toggle('has-np', !!t);
+
+        if (t && elTitle) {
+            elTitle.textContent = t.title || '—';
+            elArtist.textContent = t.author || '';
+            elArt.textContent = mono(t.title);
+            elArt.style.background = tint(t.url);
+        }
+        // Don't touch the glyph mid-load: setGlyph('▶') also clears the spinner, which
+        // would make a track that is still buffering look idle.
+        if (status !== 'loading') setGlyph(audio && !audio.paused ? '❙❙' : '▶');
+        syncShuffle();
+    }
+
     function emit(playing) {
         var t = cur();
-        if (bar) bar.classList.toggle('show', !!t);
-        document.body.classList.toggle('has-np', !!t);   // pages reserve bottom space
+        if (t) showBar(); else hideBar();
+        repaint();
         document.dispatchEvent(new CustomEvent('ytdl:playing', { detail: { url: t ? t.url : null, playing: playing } }));
     }
 
@@ -438,12 +544,13 @@
         idx = i;
         gen++;
         var t = queue[i];
-        elTitle.textContent = t.title || '—';
-        elArtist.textContent = t.author || '';
-        elArt.textContent = mono(t.title);
-        elArt.style.background = tint(t.url);
-        bar.classList.add('show');
+        showBar();
         setStatus('loading');
+        // Project the new selection NOW — marked row, bar contents, and the "Playing"
+        // tab — rather than waiting for the audio to fire 'play'. A track that is slow to
+        // start, or never starts at all, is still the one the user picked; leaving the UI
+        // on the previous track until playback happens to begin is how the two drift.
+        repaint();
         markSource(t, gen);
         paintFull();
         audio.src = t.url;
@@ -604,11 +711,39 @@
         });
     }
 
-    // Resolve a playlist device-first (same order as playFromApi) without playing it.
-    function resolve(id) {
+    // Which locally-known track list to play from. BOTH sources are pure device reads
+    // (localStorage — no network), so this is only a question of which is more current:
+    //   * the cached manifest — refreshed on page load and after every server-side edit
+    //   * the downloaded copy — frozen at download time, so it cannot know about a track
+    //     added since, and its stale list would resolve a tap to the wrong row
+    // When a specific track was tapped, only a list that actually CONTAINS it will do:
+    // otherwise findIndex returns -1 and start() silently falls back to index 0, playing
+    // some other track. Returning null instead lets the caller go and ask the server.
+    function localPlaylist(id, atUrl) {
         if (!window.ytdlOffline) return null;
-        var pl = ytdlOffline.get(id) || ytdlOffline.manifestPlaylist(id);
-        return (pl && pl.tracks && pl.tracks.length) ? pl : null;
+        var man = ytdlOffline.manifestPlaylist(id), saved = ytdlOffline.get(id);
+        return usable(man, atUrl) || usable(saved, atUrl) || null;
+    }
+    function usable(pl, atUrl) {
+        if (!pl || !pl.tracks || !pl.tracks.length) return null;
+        if (!atUrl) return pl;
+        return pl.tracks.some(function (t) { return t.url === atUrl; }) ? pl : null;
+    }
+
+    // Resolve a playlist device-first (same order as playFromApi) without playing it.
+    function resolve(id) { return localPlaylist(id); }
+
+    // Last resort for a tap on a track this device has never heard of, with no reachable
+    // server: play it on its own. The row we were tapped from already carries everything
+    // the player needs, so doing nothing would be a choice, not a limitation.
+    function playAlone(url) {
+        var sel = '.trk[data-track-url="' + (window.CSS && CSS.escape ? CSS.escape(url) : url) + '"]';
+        var row = document.querySelector(sel);
+        if (!row) return false;
+        ctxId = '';
+        play([{ url: url, title: row.getAttribute('data-title'), author: row.getAttribute('data-artist') }],
+             0, row.getAttribute('data-list-name') || '');
+        return true;
     }
 
     // Resume where each track left off (keyed by its stable stream URL).
@@ -626,15 +761,9 @@
     }
     function forgetPos() { var t = cur(); if (t) localStorage.removeItem(posKey(t.url)); }
 
-    // Generic row highlighter: any page whose track rows carry [data-track-url] gets the
-    // playing row marked for free.
-    document.addEventListener('ytdl:playing', function (e) {
-        var url = e.detail.url;
-        document.querySelectorAll('.trk[data-track-url]').forEach(function (el) {
-            el.classList.toggle('playing', !!url && el.getAttribute('data-track-url') === url);
-        });
-        markCurrentCard();
-    });
+    // Row highlighting is repaint()'s job now — it has to survive re-renders, and an
+    // event only reaches the rows that happen to exist when it fires. The event is kept
+    // for anything else that wants to know playback changed.
 
     window.ytdlPlayer = {
         play: play,
@@ -660,23 +789,24 @@
         // is already on the device must touch the network ZERO times. The manifest is
         // refreshed on page load instead (playlist-offline.js).
         playFromApi: async function (id, atUrl) {
-            var local = window.ytdlOffline
-                ? (ytdlOffline.get(id) || ytdlOffline.manifestPlaylist(id))
-                : null;
-            if (local && local.tracks && local.tracks.length) {
+            var local = localPlaylist(id, atUrl);
+            if (local) {
                 start(local, atUrl);
                 return;
             }
+            // Either nothing is stored for this playlist, or what is stored predates the
+            // track that was tapped (just added on the server). Only then do we ask.
             try {
                 var res = await fetchSoon('/api/playlists');
                 var pls = await res.json();
                 if (window.ytdlOffline) ytdlOffline.saveManifest(pls);
                 var pl = pls.find(function (p) { return p.id === id; });
-                if (!pl || !pl.tracks.length) return;
+                if (!pl || !pl.tracks.length) throw new Error('no such playlist');
                 start(pl, atUrl);
             } catch (e) {
+                if (atUrl && playAlone(atUrl)) return;
                 // No local copy and no reachable server — say so instead of doing nothing.
-                if (bar) bar.classList.add('show');
+                showBar();
                 note(navigator.onLine
                     ? '⚠ Weak signal — this playlist isn’t saved on this device.'
                     : '⚠ Offline — this playlist isn’t saved on this device.');
@@ -706,6 +836,7 @@
         isPlaying: function () { return !!(audio && !audio.paused); }
     };
 
-    if (document.readyState !== 'loading') injectBar();
-    else document.addEventListener('DOMContentLoaded', injectBar);
+    function boot() { injectBar(); watchMount(); }
+    if (document.readyState !== 'loading') boot();
+    else document.addEventListener('DOMContentLoaded', boot);
 })();
