@@ -16,6 +16,10 @@
                 <span id="offline-count">Checking this phone…</span>
             </div>
         </div>
+        @* Plain JS, like everything else in this shell: syncing is exactly what you reach
+           for when the circuit is unhealthy, so it must not depend on one. *@
+        <button class="icon-btn" id="btn-sync" aria-label="Sync with server" title="Sync with server"
+                onclick="ytdlSync()">⟳</button>
         <button class="icon-btn" id="btn-search" aria-label="Search" onclick="ytdlUI.toggleSearch()">⌕</button>
     </header>
 
@@ -26,6 +30,9 @@
 
     <main class="app-main" id="app-main">
         <div id="offline-banner" class="offline-banner" hidden></div>
+        @* playlist-offline.js reports the result of a sync here. Its own element rather
+           than a JS-injected node, so it never sits inside the region Blazor diffs. *@
+        <div id="sync-slot"></div>
         <div id="pwa-slot"></div>
         @Body
     </main>
@@ -34,15 +41,20 @@
        floating over the content. *@
     <div id="np-slot"></div>
 
+    @* Two places to be, and one to return to. Adding a link is a thing you do occasionally
+       and from the Library ("From YouTube"), so it no longer earns a permanent tab; what
+       you almost always want back is whatever is playing. That middle button appears only
+       when there IS something playing — body.has-np is set by player.js — so it is never
+       a dead control. Plain JS, like every other control on the path to playback. *@
     <nav class="tabbar">
         <NavLink class="tab" href="" Match="NavLinkMatch.All">
             <span class="tab-i">≡</span><span class="tab-l">Playlists</span>
         </NavLink>
+        <button type="button" class="tab tab-np" onclick="ytdlPlayer.openFull()">
+            <span class="tab-i">♫</span><span class="tab-l">Playing</span>
+        </button>
         <NavLink class="tab" href="library">
             <span class="tab-i">♪</span><span class="tab-l">Library</span>
-        </NavLink>
-        <NavLink class="tab needs-circuit" href="download">
-            <span class="tab-i">↓</span><span class="tab-l">Add</span>
         </NavLink>
     </nav>
 </div>
