@@ -116,6 +116,14 @@
                     <button class="btn-dashed needs-circuit" @onclick="() => OpenAddDialog(pl.Id)">+ Add tracks</button>
                     @* Tracks are appended in the order you picked them, which for a long
                        series is rarely the order you want to hear it in. *@
+                    @if (items.Any(i => i.SourceIndex >= 0))
+                    {
+                        @* The exact answer, offered only when the tracks actually carry a
+                           position — a button that silently does nothing is worse than no
+                           button. Re-paste the playlist link to record positions. *@
+                        <button class="btn-mini needs-circuit" title="Put the tracks back in the order the YouTube playlist listed them"
+                                @onclick="() => SortBySource(pl.Id)">Original order</button>
+                    }
                     <button class="btn-mini needs-circuit" title="Order by title, numbers read as numbers"
                             @onclick="() => SortByName(pl.Id)">Sort 1→9</button>
                     <button class="btn-mini needs-circuit" @onclick="() => OpenRenameDialog(pl.Id)">Rename</button>
@@ -275,7 +283,8 @@
     protected override void OnInitialized() => _playlists = Store.All();
 
     private sealed record Item(string RecordId, string Title, string Author, int AudioIndex,
-                               string RawDuration, bool HasLyrics, bool Pending = false)
+                               string RawDuration, bool HasLyrics, bool Pending = false,
+                               string SourcePlaylistId = "", int SourceIndex = -1)
     {
         public string Duration => TrackVisuals.Duration(RawDuration);
     }
@@ -289,7 +298,8 @@
             list.Add(rec is null
                 ? new Item(rid, "(removed from library)", "", -1, "", false)
                 : new Item(rid, rec.Title, rec.Author, FirstAudioIndex(rec), rec.Duration,
-                           LyricsService.Has(rec), rec.Pending));
+                           LyricsService.Has(rec), rec.Pending,
+                           rec.SourcePlaylistId, rec.SourceIndex));
         }
         return list;
     }
@@ -430,8 +440,20 @@
         await NotifyChanged();
     }
 
+    /// <summary>Puts the playlist back in the order the YouTube playlist listed it, from
+    /// the position each track recorded when its link was added.</summary>
+    private async Task SortBySource(string plId)
+    {
+        if (Store.Get(plId) is not { } pl) return;
+        var ordered = SourceOrder.Apply(Resolve(pl), i => i.SourcePlaylistId, i => i.SourceIndex);
+        await Store.ReorderAsync(plId, ordered.Select(i => i.RecordId));
+        _playlists = Store.All();
+        await NotifyChanged();
+    }
+
     /// <summary>Puts the playlist in title order, reading digits as numbers so
-    /// "Phần 2" lands before "Phần 10".</summary>
+    /// "Phần 2" lands before "Phần 10". The fallback when the tracks carry no recorded
+    /// position — it infers the order from numbering in the titles.</summary>
     private async Task SortByName(string plId)
     {
         if (Store.Get(plId) is not { } pl) return;

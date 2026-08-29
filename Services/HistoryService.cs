@@ -100,6 +100,25 @@ public class HistoryService
         finally { _gate.Release(); }
     }
 
+    /// <summary>
+    /// Applies a batch of edits and saves ONCE. Re-adding a playlist link restamps the
+    /// position of every track it lists, and <see cref="UpdateAsync"/> serialises the whole
+    /// file per call — for a 200-video playlist that is 200 rewrites of the same file.
+    /// </summary>
+    public async Task UpdateManyAsync(IReadOnlyCollection<(string Id, Action<DownloadRecord> Mutate)> edits)
+    {
+        if (edits.Count == 0) return;
+        await _gate.WaitAsync();
+        try
+        {
+            lock (_records)
+                foreach (var (id, mutate) in edits)
+                    if (_records.FirstOrDefault(r => r.Id == id) is { } record) mutate(record);
+            await SaveAsync();
+        }
+        finally { _gate.Release(); }
+    }
+
     /// <summary>Records added as links and not fetched yet, newest first.</summary>
     public IReadOnlyList<DownloadRecord> PendingItems() => Snapshot(r => r.Pending && !r.Archived);
 

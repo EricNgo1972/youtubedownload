@@ -55,6 +55,7 @@ public class DownloadJobService : BackgroundService
         var videos = await _downloader.ResolveLinksAsync(url, options.Playlist, ct);
         var added = new List<DownloadRecord>();
         var updated = new List<DownloadRecord>();
+        var edits = new List<(string Id, Action<DownloadRecord> Mutate)>();
         var existing = 0;
         foreach (var v in videos)
         {
@@ -63,19 +64,28 @@ public class DownloadJobService : BackgroundService
                 // Already here. If it hasn't been fetched yet, re-adding the link is how a
                 // user corrects the choices they made the first time — most often ticking
                 // "audiobook" after the fact — so adopt the new options rather than
-                // silently ignoring them. A track that already has audio is left alone.
+                // silently ignoring them. A track that already has audio keeps its options.
+                //
+                // Its POSITION is taken either way: where the link lists a video is a fact
+                // about the link, not a download setting, so re-pasting a playlist URL is
+                // how you repair the order of tracks added before it was ever recorded.
                 if (known.Pending)
                 {
-                    await _history.UpdateAsync(known.Id, r =>
+                    edits.Add((known.Id, r =>
                     {
                         r.Mp4 = options.Mp4;
                         r.Mp3 = options.Mp3;
                         r.Subtitles = options.Subtitles;
                         r.SpokenWord = options.SpokenWord;
-                    });
+                        Locate(r, v);
+                    }));
                     updated.Add(known);
                 }
-                else existing++;
+                else
+                {
+                    existing++;
+                    if (v.Index >= 0) edits.Add((known.Id, r => Locate(r, v)));
+                }
                 continue;
             }
 
@@ -94,14 +104,28 @@ public class DownloadJobService : BackgroundService
                 Subtitles = options.Subtitles,
                 SpokenWord = options.SpokenWord,
                 Pending = true,
+                SourcePlaylistId = v.PlaylistId,
+                SourceIndex = v.Index,
             };
             await _history.AddAsync(rec);
             added.Add(rec);
         }
+        // One write for every track the link already knew about, however many that is.
+        await _history.UpdateManyAsync(edits);
+
         // Re-added pending tracks come back in the list too, so the page can show them
         // with their (now corrected) settings instead of appearing to have done nothing.
         added.AddRange(updated);
         return (added, existing, updated.Count);
+    }
+
+    /// <summary>Stamps a record with where the link listed it. A single video has no
+    /// position, so it must not wipe one the record already carries from a playlist.</summary>
+    private static void Locate(DownloadRecord r, LinkedVideo v)
+    {
+        if (v.Index < 0) return;
+        r.SourcePlaylistId = v.PlaylistId;
+        r.SourceIndex = v.Index;
     }
 
     /// <summary>

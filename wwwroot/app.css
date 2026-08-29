@@ -221,9 +221,12 @@ body.has-np .tab-np { display: flex; }
 .dl-toggle.busy { border-color: var(--accent-45); color: var(--accent); font-size: 11px; font-weight: 700; font-family: var(--display); }
 
 .pl-body { border-top: 1px solid var(--line); padding: 6px 6px 8px; }
-.pl-foot { display: flex; gap: 8px; padding: 8px 8px 2px; }
-.pl-foot .btn-dashed { height: 40px; border-radius: 10px; font-size: 12.5px; }
-.pl-foot .btn-mini { height: 40px; border: 0; background: rgba(255, 255, 255, .05); }
+/* Wraps because the row holds up to five controls and a phone is 390px wide. Add tracks
+   takes a line of its own — it is the one thing you come down here to do; the rest share
+   the line below it and wrap again on a narrow screen rather than squashing their labels. */
+.pl-foot { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 8px 2px; }
+.pl-foot .btn-dashed { flex: 1 1 100%; height: 40px; border-radius: 10px; font-size: 12.5px; }
+.pl-foot .btn-mini { flex: 1 1 auto; height: 40px; border: 0; background: rgba(255, 255, 255, .05); }
 
 .empty { padding: 48px 20px; text-align: center; }
 .empty-t { font-family: var(--display); font-size: 17px; font-weight: 700; }

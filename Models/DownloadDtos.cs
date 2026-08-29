@@ -18,5 +18,11 @@ public record PlannedVideo(string VideoId, string Title);
 public record DownloadPlan(string PlaylistTitle, string OutputDir, IReadOnlyList<PlannedVideo> Videos);
 
 /// <summary>A video behind a pasted link, known from metadata alone — nothing downloaded.
-/// This is what a library entry holds until someone asks for the audio.</summary>
-public record LinkedVideo(string VideoId, string Title, string Author, string Duration);
+/// This is what a library entry holds until someone asks for the audio.
+///
+/// <paramref name="PlaylistId"/> and <paramref name="Index"/> record WHERE the link listed
+/// this video. It is the only moment that order is known — the library sorts by when a
+/// track arrived, so without carrying the position here a playlist's real order is gone
+/// the instant it lands. Both are empty/-1 for a single video, which has no position.</summary>
+public record LinkedVideo(string VideoId, string Title, string Author, string Duration,
+                          string PlaylistId = "", int Index = -1);

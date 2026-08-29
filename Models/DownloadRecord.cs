@@ -32,6 +32,20 @@ public class DownloadRecord
     public bool Archived { get; set; }
 
     /// <summary>
+    /// The YouTube playlist this track was added from, and its zero-based position in it.
+    /// Captured when the link is resolved because that is the only moment the order is
+    /// known: the library is sorted newest-first and a fetch restamps
+    /// <see cref="DownloadedAt"/>, so by the time a track reaches a playlist its original
+    /// position is otherwise unrecoverable.
+    ///
+    /// Records written before these fields existed (and anything not from a playlist —
+    /// a single video, an upload) keep the -1 the initializer gives them, which sorts
+    /// them to the end rather than claiming position zero.
+    /// </summary>
+    public string SourcePlaylistId { get; set; } = "";
+    public int SourceIndex { get; set; } = -1;
+
+    /// <summary>
     /// A track added as a LINK only: its title, author and duration are known but no bytes
     /// exist on the server yet, so <see cref="Files"/> is empty. Pasting a URL is then
     /// instant and free, and nothing is fetched until someone actually wants the track.

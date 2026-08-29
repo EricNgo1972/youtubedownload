@@ -83,10 +83,13 @@ public class YoutubeDownloadService
                 async () => await _youtube.Playlists.GetVideosAsync(playlistId).CollectAsync(), ct);
 
             // PlaylistVideo already carries title/author/duration, so a 200-video playlist
-            // costs one listing rather than 200 metadata calls.
-            return videos.Select(v => new LinkedVideo(
+            // costs one listing rather than 200 metadata calls. GetVideosAsync yields them
+            // in playlist order, so the loop index IS the position — the one chance to
+            // record it before the library re-sorts everything by arrival time.
+            return videos.Select((v, i) => new LinkedVideo(
                 v.Id.Value, v.Title, v.Author.ChannelTitle,
-                v.Duration?.ToString(@"hh\:mm\:ss") ?? "")).ToList();
+                v.Duration?.ToString(@"hh\:mm\:ss") ?? "",
+                playlistId.Value, i)).ToList();
         }
 
         if (VideoId.TryParse(url) is not { } videoId)

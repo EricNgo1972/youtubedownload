@@ -20,6 +20,12 @@
     The tracks then appear below. Tap <b>Download</b> on the ones you actually want: the
     server fetches the audio and your phone saves its own copy automatically. You can also
     do this later from <a href="library">Library</a>.
+    <br /><br />
+    @* Positions are recorded on every add, including a re-add — so pasting a playlist link
+       you already have is the way to repair the order of tracks that predate this. *@
+    Each track remembers its place in the playlist you pasted, so
+    <a href="playlists">Playlists</a> can put it back in <b>Original order</b>. Pasting a
+    link you already have costs nothing and refreshes those positions.
 </div>
 
 <div class="card">
@@ -361,10 +367,14 @@
             _addResult = (fresh, updated, existing) switch
             {
                 (0, 0, 0) => "Nothing to add for that link.",
-                (0, 0, _) => $"Already downloaded ({existing} track{(existing == 1 ? "" : "s")}) — settings unchanged.",
+                // Nothing new, but a playlist link still repairs every one of those tracks'
+                // recorded position — which is the whole reason to paste it a second time.
+                (0, 0, _) => _wantPlaylist
+                    ? $"Already in your library ({existing} track{(existing == 1 ? "" : "s")}) — playlist order refreshed."
+                    : $"Already downloaded ({existing} track{(existing == 1 ? "" : "s")}) — settings unchanged.",
                 (0, _, _) => $"Already waiting to download — settings updated to {(_wantSpoken ? "audiobook" : "music")}.",
                 (_, 0, 0) => $"Added {fresh} track{(fresh == 1 ? "" : "s")} — download what you want below.",
-                _ => $"Added {fresh}, updated {updated}, skipped {existing} already downloaded.",
+                _ => $"Added {fresh}, updated {updated}, {existing} already in your library.",
             };
             if (added.Count > 0)
             {
