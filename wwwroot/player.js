@@ -34,6 +34,9 @@
     var queue = [];   // live play order (already shuffled when shuffle is on)
     var src = [];     // original unshuffled order, so shuffle can be turned back off
     var idx = -1;
+    var dir = 1;      // which way the listener is moving: Next/auto-advance +1, Previous -1.
+                      // A track that turns out not to be on the device is skipped past in
+                      // this direction, so Previous keeps going back.
     var lastSave = 0;
     var stallTimer = null;   // watchdog for "load started but no audio ever arrived"
     var API_MS = 2500;       // give up on the playlist API this fast, then use local data
@@ -293,7 +296,7 @@
         if (audio._ytdlBound) { render(true); return; }
         audio._ytdlBound = true;
 
-        audio.addEventListener('ended', function () { forgetPos(); if (repeat) playAt(idx); else next(); });
+        audio.addEventListener('ended', function () { forgetPos(); if (vm.repeat) playAt(idx); else next(); });
         audio.addEventListener('play', function () { emit(true); });
         audio.addEventListener('playing', function () { setStatus('ok'); });   // real audio started
         audio.addEventListener('canplay', function () { if (vm.status === 'loading') setStatus('ok'); });
@@ -318,7 +321,7 @@
         $('npf-prev').addEventListener('click', prev);
         $('np-open').addEventListener('click', openFull);
         $('npf-close').addEventListener('click', closeFull);
-        $('npf-shuffle').addEventListener('click', function () { setShuffle(!shuffle); });
+        $('npf-shuffle').addEventListener('click', function () { setShuffle(!vm.shuffle); });
         $('npf-repeat').addEventListener('click', function () {
             set({ repeat: !vm.repeat });
             localStorage.setItem('ytdl-repeat', vm.repeat ? '1' : '0');
@@ -599,8 +602,10 @@
     // to a track the user has already skipped past can't clobber the current one.
     var gen = 0;
 
-    function playAt(i) {
+    function playAt(i, step) {
         if (i < 0 || i >= queue.length) return;
+        // Default forward: a tap on a row, a retry, repeat-one. Only Previous goes back.
+        dir = step < 0 ? -1 : 1;
         idx = i;
         gen++;
         var t = queue[i];
@@ -662,25 +667,35 @@
         // On the device but still unplayable — a real file/decode problem, not the network.
         if (onDevice) { setStatus('error', '⚠ This track wouldn’t play — tap ▶ to retry.'); return; }
 
-        // Not on the device: rather than stalling the whole queue on a dead link, jump
-        // ahead to the next track we know we can play right now.
-        if (await skipToDownloaded(myGen)) return;
+        // Not on the device: rather than stalling the whole queue on a dead link, carry on
+        // to the next track we know we can play right now — in the direction the listener
+        // was already travelling.
+        if (await skipToDownloaded(myGen, dir)) return;
 
+        // Nothing playable left that way. Stop rather than leave the element in a play
+        // state over silence: <audio> does not pause itself on a load error, so the
+        // lock screen and the ▶/❚❚ glyph would both go on claiming it is playing.
+        audio.pause();
         setStatus('error', navigator.onLine
             ? '⚠ Weak signal — this track isn’t saved on this device. Tap ▶ to retry.'
             : '⚠ Offline — this track isn’t saved on this device.');
     }
 
-    // Advance to the next track whose audio is already in the cache. Returns whether it
-    // moved. Bounded: the track it lands on is on-device, so it can't chain failures.
-    async function skipToDownloaded(myGen) {
+    // Move to the nearest track whose audio is already in the cache, searching the way the
+    // listener was going: Next (or an auto-advance) looks forward, Previous looks back.
+    // Searching only forward meant Previous landed *ahead* of where it started whenever the
+    // track behind wasn't downloaded — the one control that must go back was the one that
+    // couldn't. Returns whether it moved. Bounded: the track it lands on is on-device, so
+    // it cannot chain failures.
+    async function skipToDownloaded(myGen, step) {
         if (queue.length < 2 || idx < 0) return false;
         var set = window.ytdlOffline && ytdlOffline.cachedSet ? await ytdlOffline.cachedSet() : null;
         if (!set || !set.size || myGen !== gen) return false;
-        for (var j = idx + 1; j < queue.length; j++) {
+        step = step < 0 ? -1 : 1;
+        for (var j = idx + step; j >= 0 && j < queue.length; j += step) {
             if (set.has(pathOf(queue[j].url))) {
-                var skipped = j - idx;
-                playAt(j);
+                var skipped = Math.abs(j - idx);
+                playAt(j, step);
                 note('⤓ Skipped ' + skipped + ' track' + (skipped === 1 ? '' : 's') + ' not saved on this device.');
                 return true;
             }
@@ -705,10 +720,10 @@
     /// One-line message under the title (errors, "skipped N tracks", …).
     function note(msg) { set({ note: msg }); }
 
-    function next() { if (idx + 1 < queue.length) playAt(idx + 1); }
+    function next() { if (idx + 1 < queue.length) playAt(idx + 1, 1); }
     function prev() {
         if (audio && audio.currentTime > 3) { audio.currentTime = 0; return; }
-        if (idx > 0) playAt(idx - 1);
+        if (idx > 0) playAt(idx - 1, -1);
     }
     function toggle() { if (!audio) return; if (audio.paused) audio.play().catch(function () { }); else audio.pause(); }
 
