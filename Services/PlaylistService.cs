@@ -94,6 +94,21 @@ public class PlaylistService
         (p.RecordIds[i], p.RecordIds[j]) = (p.RecordIds[j], p.RecordIds[i]);
     });
 
+    /// <summary>
+    /// Replaces the playlist's order with <paramref name="recordIds"/>. Ids that are not
+    /// in the playlist are ignored and any member the caller left out keeps its place at
+    /// the end, so a reorder computed against a stale view can never drop a track.
+    /// </summary>
+    public Task ReorderAsync(string id, IEnumerable<string> recordIds) => Mutate(() =>
+    {
+        var p = Find(id);
+        if (p is null) return;
+        var members = p.RecordIds.ToHashSet();
+        var next = recordIds.Where(members.Remove).ToList();   // Remove: keeps it to one each
+        next.AddRange(p.RecordIds.Where(members.Contains));
+        p.RecordIds = next;
+    });
+
     private Playlist? Find(string id)
     {
         lock (_playlists) return _playlists.FirstOrDefault(p => p.Id == id);

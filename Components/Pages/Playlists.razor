@@ -13,6 +13,10 @@
     @foreach (var pl in _playlists)
     {
         var items = Resolve(pl);
+        @* Every episode of a series repeats the series name, and on a phone that run of
+           characters is the whole width of the row — the part that names the episode is
+           what falls off the end. Hoist it out of the rows and show it once. *@
+        var shared = TrackVisuals.SharedPrefix(items.Select(i => i.Title));
         <section class="pl-card" data-pl-card="@pl.Id">
             <div class="pl-head">
                 @* Expand/collapse runs in plain JS, not @@onclick: with a weak or dead
@@ -43,6 +47,13 @@
                 {
                     <div class="hint" style="padding:22px 12px;text-align:center">Empty — add tracks from your library.</div>
                 }
+                else if (shared.Length > 0)
+                {
+                    @* "Rows starting", not "every row": the prefix only has to be the one
+                       most of the list shares, and a track that doesn't start with it
+                       keeps its whole title below. *@
+                    <div class="series-prefix">Rows starting “@shared …” are shortened</div>
+                }
                 @for (var idx = 0; idx < items.Count; idx++)
                 {
                     var it = items[idx];
@@ -56,9 +67,12 @@
                          data-artist="@Artist(it.Author)" data-list="@pl.Id" data-list-name="@pl.Name">
                         <button class="trk-hit" onclick="ytdlPlayer.tapTrack('@trackUrl', '@pl.Id')"
                                 disabled="@(trackUrl is null)">
-                            <span class="trk-art" style="background:@Tint(it.RecordId)">@Mono(it.Title)</span>
+                            @* The number, not the monogram: in a series every monogram is
+                               the same two letters, so the position is the only thing the
+                               tile can say that differs from the row above. *@
+                            <span class="trk-art num" style="background:@Tint(it.RecordId)">@(idx + 1)</span>
                             <span class="trk-main">
-                                <span class="trk-title">@it.Title</span>
+                                <span class="trk-title" title="@it.Title">@TrackVisuals.StripPrefix(it.Title, shared)</span>
                                 <span class="trk-sub">
                                     @if (Artist(it.Author) is { Length: > 0 } a)
                                     {
@@ -100,6 +114,10 @@
 
                 <div class="pl-foot">
                     <button class="btn-dashed needs-circuit" @onclick="() => OpenAddDialog(pl.Id)">+ Add tracks</button>
+                    @* Tracks are appended in the order you picked them, which for a long
+                       series is rarely the order you want to hear it in. *@
+                    <button class="btn-mini needs-circuit" title="Order by title, numbers read as numbers"
+                            @onclick="() => SortByName(pl.Id)">Sort 1→9</button>
                     <button class="btn-mini needs-circuit" @onclick="() => OpenRenameDialog(pl.Id)">Rename</button>
                     <button class="btn-mini needs-circuit" @onclick="() => AskDelete(pl.Id)">Delete</button>
                 </div>
@@ -280,7 +298,6 @@
     private static string Meta(List<Item> items) => TrackVisuals.Meta(items.Count, items.Select(i => i.RawDuration));
     private static string Artist(string? author) => TrackVisuals.Artist(author);
     private static string Tint(string id) => TrackVisuals.Tint(id);
-    private static string Mono(string title) => TrackVisuals.Mono(title);
 
     private void OpenAddDialog(string plId)
     {
@@ -334,7 +351,12 @@
     private async Task AddSelected()
     {
         if (_addDialogPlaylistId is null || _selected.Count == 0) return;
-        await Store.AddItemsAsync(_addDialogPlaylistId, _selected.ToList());
+        // In library order, not the order a hash set happens to enumerate: the rows go in
+        // the way the dialog listed them. Selections survive retyping the search, so this
+        // walks the library rather than the current (filtered, capped) matches.
+        var picked = History.Active().Where(r => _selected.Contains(r.Id)).Select(r => r.Id).ToList();
+        picked.AddRange(_selected.Except(picked));
+        await Store.AddItemsAsync(_addDialogPlaylistId, picked);
         _playlists = Store.All();
         CloseAddDialog();
         await NotifyChanged();
@@ -404,6 +426,19 @@
     private async Task Remove(string plId, string recordId)
     {
         await Store.RemoveItemAsync(plId, recordId);
+        _playlists = Store.All();
+        await NotifyChanged();
+    }
+
+    /// <summary>Puts the playlist in title order, reading digits as numbers so
+    /// "Phần 2" lands before "Phần 10".</summary>
+    private async Task SortByName(string plId)
+    {
+        if (Store.Get(plId) is not { } pl) return;
+        var ordered = Resolve(pl)
+            .OrderBy(i => i.Title, NaturalOrder.Instance)
+            .Select(i => i.RecordId);
+        await Store.ReorderAsync(plId, ordered);
         _playlists = Store.All();
         await NotifyChanged();
     }

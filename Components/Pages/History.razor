@@ -74,6 +74,14 @@ else
         <div class="empty-s">Try a different search, or switch the filter above.</div>
     </div>
 
+    @* When the whole list is one series, every row spends its width repeating the series
+       name and loses the part that names the episode. Hoist it out and show it once. *@
+    var shared = TrackVisuals.SharedPrefix(_records.Select(r => r.Title));
+    if (shared.Length > 0)
+    {
+        <div class="series-prefix">Rows starting “@shared …” are shortened</div>
+    }
+
     <div id="lib-rows">
         @foreach (var r in _records)
         {
@@ -91,7 +99,7 @@ else
                         data-artist="@TrackVisuals.Artist(r.Author)" disabled="@(trackUrl is null)">
                     <span class="trk-art" style="background:@TrackVisuals.Tint(r.Id)">@TrackVisuals.Mono(r.Title)</span>
                     <span class="trk-main">
-                        <span class="trk-title">@r.Title</span>
+                        <span class="trk-title" title="@r.Title">@TrackVisuals.StripPrefix(r.Title, shared)</span>
                         <span class="trk-sub">
                             @if (TrackVisuals.Artist(r.Author) is { Length: > 0 } a)
                             {

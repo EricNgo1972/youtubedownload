@@ -45,6 +45,78 @@ public static class TrackVisuals
         return null;
     }
 
+    // Where a shared prefix may end, and what to shave off the front of what's left. Both
+    // are separators a title uses between its series name and the part that names the
+    // episode, so cutting on one keeps whole words on both sides of the cut.
+    private static readonly char[] Boundary = { ' ', '-', '\u2013', '\u2014', ':', '|', '\u00b7' };
+    private static readonly char[] LeadIn = { ' ', '-', '\u2013', '\u2014', ':', '|', '\u00b7', '.', ',' };
+
+    /// <summary>The shortest prefix worth hoisting. Shorter than this and lifting it out
+    /// costs the reader a line of chrome to win back four characters.</summary>
+    private const int MinPrefix = 12;
+
+    /// <summary>Longest prefix considered, and the share of the list that must start with
+    /// one for it to win. "Most", not "all": a playlist of fifty audiobook parts usually
+    /// has a stray track or two in it, and they must not cost the other forty-eight their
+    /// readable rows — a row that doesn't start with the prefix simply keeps its title.</summary>
+    private const int MaxPrefix = 60;
+    private const double DominantShare = 0.6;
+
+    /// <summary>
+    /// The leading run most of these titles share, cut at a word boundary — the series
+    /// name in front of a 58-part audiobook. Shown once above the list so each row can
+    /// spend its width on the part that actually tells it apart; returns "" when no
+    /// prefix is common or long enough to be worth the trade.
+    /// </summary>
+    public static string SharedPrefix(IEnumerable<string> titles)
+    {
+        var list = titles as IList<string> ?? titles.ToList();
+        if (list.Count < 3) return "";
+
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var title in list)
+            foreach (var candidate in Prefixes(title))
+                counts[candidate] = counts.GetValueOrDefault(candidate) + 1;
+
+        // A longer candidate can never be commoner than a shorter one it extends, so the
+        // longest that clears the bar is the most specific prefix the list agrees on.
+        var needed = Math.Max(3, (int)Math.Ceiling(list.Count * DominantShare));
+        var best = "";
+        foreach (var (candidate, count) in counts)
+            if (count >= needed &&
+                (candidate.Length > best.Length ||
+                 (candidate.Length == best.Length && string.CompareOrdinal(candidate, best) < 0)))
+                best = candidate;
+        return best;
+    }
+
+    /// <summary>Every word-boundary prefix of one title, longest-worth-having only, each
+    /// yielded once — repeated separators ("A - B") must not make one title look like
+    /// three votes for the same prefix.</summary>
+    private static IEnumerable<string> Prefixes(string title)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var limit = Math.Min(title.Length, MaxPrefix);
+        for (var i = MinPrefix; i < limit; i++)
+        {
+            if (Array.IndexOf(Boundary, title[i]) < 0) continue;
+            // Cutting at a boundary char keeps whole words on both sides — and every
+            // boundary char is a single UTF-16 unit, so it can never split a surrogate.
+            var candidate = title[..i].TrimEnd(LeadIn);
+            if (candidate.Length >= MinPrefix && seen.Add(candidate)) yield return candidate;
+        }
+    }
+
+    /// <summary>A title with the list's shared prefix taken off the front. Falls back to
+    /// the whole title when nothing would be left — a row with no text is worse than a
+    /// row that repeats the series name.</summary>
+    public static string StripPrefix(string title, string prefix)
+    {
+        if (prefix.Length == 0 || !title.StartsWith(prefix, StringComparison.Ordinal)) return title;
+        var rest = title[prefix.Length..].TrimStart(LeadIn);
+        return rest.Length == 0 ? title : rest;
+    }
+
     /// <summary>Author, blanked for uploads (where it's the placeholder "Uploaded").</summary>
     public static string Artist(string? author) =>
         string.IsNullOrWhiteSpace(author) || author == "Uploaded" ? "" : author;

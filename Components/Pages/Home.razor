@@ -92,6 +92,10 @@
    made a single action feel like an errand. *@
 @if (_added.Count > 0)
 {
+    @* Every episode of a series repeats the series name, and that run of characters is
+       most of the row's width on a phone — the part naming the episode is what falls off
+       the end. Hoist it out of the rows and show it once above them. *@
+    var shared = TrackVisuals.SharedPrefix(_added.Select(r => r.Title));
     <div class="row-between">
         <div class="eyebrow" style="margin-top:22px">Just added</div>
         @if (_added.Any(r => r.Pending && Jobs.FetchProgress(r.Id) is null))
@@ -101,13 +105,24 @@
     </div>
 
     <div class="card">
+        @* These are library tracks, numbered in the order the link listed them — not a
+           playlist. Saying so here saves the trip to Playlists to find out. *@
+        <div class="series-prefix">
+            @(shared.Length > 0 ? $"“{shared} …” shortened" : "In the order the link listed them")
+            · numbered · not a playlist — group them on <a href="playlists">Playlists</a>
+        </div>
+        @{ var pos = 0; }
         @foreach (var r in _added)
         {
+            pos++;
             var fetch = Jobs.FetchProgress(r.Id);
             <div class="trk">
-                <span class="trk-art" style="background:@TrackVisuals.Tint(r.Id)">@TrackVisuals.Mono(r.Title)</span>
+                @* The number, not the monogram: across one series every monogram is the
+                   same two letters, so the position is the only thing the tile can say
+                   that differs from the row above. *@
+                <span class="trk-art num" style="background:@TrackVisuals.Tint(r.Id)">@pos</span>
                 <span class="trk-main">
-                    <span class="trk-title">@r.Title</span>
+                    <span class="trk-title" title="@r.Title">@TrackVisuals.StripPrefix(r.Title, shared)</span>
                     <span class="trk-sub">
                         @if (!r.Pending)
                         {
