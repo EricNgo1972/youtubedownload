@@ -7,7 +7,7 @@
 // a real bubbling event, so the @onclick handler runs exactly as if tapped — which keeps
 // one implementation of every mutation instead of a parallel JS one.
 window.ytdlUI = (function () {
-    var TITLES = { '/': 'Playlists', '/playlists': 'Playlists', '/library': 'Library', '/history': 'Library', '/download': 'Add music' };
+    var TITLES = { '/': 'Playlists', '/playlists': 'Playlists', '/library': 'Library', '/history': 'Library', '/download': 'Add music', '/players': 'Players' };
     var query = '';
     var filter = 'all';
 

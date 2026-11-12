@@ -34,6 +34,10 @@
                    painted from the Cache API by playlist-offline.js. *@
                 <button class="pl-ghost dl-toggle" data-download-id="@pl.Id"
                         onclick="ytdlDownloadToggle('@pl.Id')" title="Download for offline">⬇</button>
+                @* Send this playlist to a TV / kiosk / spare phone. Only shown once a
+                   player is paired (cast.js sets body.has-players). *@
+                <button class="pl-ghost pl-cast" title="Play on a player"
+                        onclick="ytdlCast.pick('@pl.Id')">⇱</button>
                 <button class="pl-ghost" data-shuffle title="Shuffle"
                         onclick="ytdlPlayer.shufflePlaylist('@pl.Id')">⤮</button>
                 <button class="pl-round" title="Play all"

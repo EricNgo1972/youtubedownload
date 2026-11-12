@@ -610,3 +610,69 @@ body.no-circuit .needs-circuit { opacity: .32; pointer-events: none; }
 .reconnect-modal.components-reconnect-rejected { display: flex; }
 .reconnect-box { display: flex; align-items: center; gap: 10px; background: var(--card-2); border: 1px solid var(--line-2); border-radius: 13px; padding: 14px 18px; font-size: 13.5px; }
 .reconnect-spinner { width: 15px; height: 15px; border: 2px solid var(--line-3); border-top-color: var(--accent); border-radius: 50%; animation: mmSpin .8s linear infinite; }
+
+/* ------------------------------------------------------------ players -- */
+/* Player boxes: TVs, kiosks and spare phones running /player, controlled from here. */
+
+a.icon-btn { display: grid; place-items: center; text-decoration: none; }
+
+/* "Play on…" exists only once something is paired (cast.js sets body.has-players). */
+body:not(.has-players) .pl-cast { display: none; }
+
+.plr-page { display: flex; flex-direction: column; gap: 10px; }
+.plr-page .card { margin-bottom: 0; }
+
+.plr-add-title { font-family: var(--display); font-weight: 700; font-size: 15px; }
+.plr-add .hint { margin: 6px 0 0; }
+.plr-steps { margin: 14px 0 0; padding-left: 20px; font-size: 13px; color: var(--text-2); line-height: 1.55; }
+.plr-steps li + li { margin-top: 8px; }
+.plr-steps b { color: var(--text); font-weight: 600; }
+.plr-url {
+    display: flex; align-items: center; gap: 8px; margin-top: 6px;
+    background: var(--card-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 6px 6px 6px 12px;
+}
+.plr-url code { flex: 1; min-width: 0; font-size: 13px; color: var(--accent); overflow-wrap: anywhere; }
+.plr-waiting { margin-top: 14px; }
+.plr-codes { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.plr-codes .chip { font-family: var(--display); font-weight: 700; letter-spacing: .08em; }
+.plr-form { display: flex; gap: 8px; margin-top: 14px; }
+.plr-code-in { flex: 0 0 96px; text-align: center; font-family: var(--display); letter-spacing: .12em; }
+.plr-add .hint-warn, .plr-add .job-error { margin-top: 8px; }
+
+.plr-card.is-playing { border-color: var(--accent-22); }
+.plr-head { display: flex; align-items: center; gap: 10px; }
+.plr-dot { width: 9px; height: 9px; border-radius: 999px; background: #E3B341; flex: 0 0 auto; }
+.plr-dot.on { background: var(--accent); }
+.plr-id { flex: 1; min-width: 0; }
+.plr-name { font-family: var(--display); font-weight: 700; font-size: 15px; }
+.plr-sub { margin-top: 2px; font-size: 12px; color: var(--muted-2); }
+
+.plr-now { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+.plr-now .trk-art { width: 44px; height: 44px; border-radius: 10px; flex: 0 0 auto; display: grid; place-items: center;
+                    font-family: var(--display); font-weight: 700; font-size: 14px; color: rgba(255, 255, 255, .9); }
+.plr-now-main { flex: 1; min-width: 0; }
+.plr-title { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plr-meta { margin-top: 3px; font-size: 12px; color: var(--muted-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plr-card .bar { margin-top: 12px; }
+.plr-card .bar .fill { transition: width 1s linear; }
+.plr-times { display: flex; justify-content: space-between; margin-top: 5px; font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.plr-alert { margin-top: 10px; font-size: 12.5px; line-height: 1.45; color: #E3B341; }
+
+.plr-ctl { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.plr-btn {
+    width: 44px; height: 44px; flex: 0 0 auto; border-radius: 999px; cursor: pointer; font-size: 13px;
+    border: 1px solid var(--line-2); background: transparent; color: var(--text-2);
+}
+.plr-btn:hover { color: var(--text); border-color: var(--line-3); }
+.plr-btn.on { border-color: var(--accent-45); color: var(--accent); }
+.plr-btn.plr-main { border: 0; background: var(--accent); color: var(--on-accent); font-size: 14px; }
+.plr-btn.plr-main:hover { background: var(--accent-hi); }
+.plr-vol { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.plr-vol input { flex: 1; min-width: 0; accent-color: var(--accent); }
+.plr-saved { margin-top: 10px; }
+
+.plr-pick { display: flex; gap: 8px; margin-top: 14px; }
+.plr-pick select { flex: 1; min-width: 0; height: 46px; }
+.plr-flash { margin-top: 10px; font-size: 12.5px; color: var(--accent); }
+.plr-foot { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; margin-top: 14px;
+            padding-top: 12px; border-top: 1px solid var(--line); }

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#06070A" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>My Music Player</title>
+    <!-- Its own manifest: installed, this is a separate full-screen app that opens straight
+         to /player, not the phone-shaped main app. -->
+    <link rel="manifest" href="/box.webmanifest?v={{v}}" />
+    <link rel="icon" href="/icon.svg" />
+    <link rel="stylesheet" href="/box.css?v={{v}}" />
+</head>
+<body>
+    <!-- box.js sets data-mode (pair | idle | now) and CSS shows the matching panel. -->
+    <div class="box" id="box" data-mode="boot">
+        <header class="bx-top">
+            <div class="bx-name" id="bx-name">My Music player</div>
+            <div class="bx-link"><span class="bx-dot" id="bx-dot"></span><span id="bx-link">Connecting…</span></div>
+        </header>
+
+        <section class="bx-pair">
+            <div class="bx-eyebrow">Pair this player</div>
+            <div class="bx-code" id="bx-code">· · · ·</div>
+            <ol class="bx-steps">
+                <li>Open My Music on your phone and go to <b>Players</b>.</li>
+                <li>Tap <b>Add player</b>, enter this code, and give it a name.</li>
+            </ol>
+        </section>
+
+        <section class="bx-idle">
+            <div class="bx-eyebrow">Ready</div>
+            <div class="bx-idle-title" id="bx-idle-title">Nothing playing</div>
+            <div class="bx-idle-sub">Pick a playlist for this player from <b>Players</b> in My Music.</div>
+        </section>
+
+        <section class="bx-now">
+            <div class="bx-art" id="bx-art">♪</div>
+            <div class="bx-meta">
+                <div class="bx-from" id="bx-from"></div>
+                <div class="bx-title" id="bx-title"></div>
+                <div class="bx-artist" id="bx-artist"></div>
+                <div class="bx-prog"><div class="bx-fill" id="bx-fill"></div></div>
+                <div class="bx-times"><span id="bx-pos">0:00</span><span id="bx-state"></span><span id="bx-dur"></span></div>
+                <div class="bx-next" id="bx-next"></div>
+            </div>
+        </section>
+
+        <footer class="bx-note" id="bx-note"></footer>
+
+        <!-- Browsers refuse to make sound until someone has touched the page. This is that
+             touch, once per start-up; it covers the whole screen so any tap counts. -->
+        <button class="bx-tap" id="bx-tap" hidden>
+            <span class="bx-tap-i">▶</span>
+            <span class="bx-tap-t">Tap to start the music</span>
+            <span class="bx-tap-s">The browser needs one tap before it will play sound.</span>
+        </button>
+
+        <audio id="bx-audio" preload="auto"></audio>
+    </div>
+
+    <script>
+        // Same worker as the main app: it is what serves saved audio when the network is
+        // gone, and what keeps this page loading at all after a reboot with no signal.
+        if ('serviceWorker' in navigator) {
+            var hadController = !!navigator.serviceWorker.controller;
+            navigator.serviceWorker.register('/sw.js?v={{v}}').catch(function () { });
+            navigator.serviceWorker.addEventListener('controllerchange', function () {
+                if (!hadController || window.__ytdlReloaded) return;
+                window.__ytdlReloaded = true;
+                location.reload();
+            });
+        }
+    </script>
+    <script src="/offline-store.js?v={{v}}"></script>
+    <script src="/box.js?v={{v}}"></script>
+</body>
+</html>

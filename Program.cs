@@ -43,6 +43,10 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<DownloadJobService
 builder.Services.AddSingleton<PreviewService>();
 builder.Services.AddHttpClient("preview");
 
+// Player boxes: TVs, kiosks and spare phones running /player, paired under a name and
+// driven from the Players page.
+builder.Services.AddSingleton<PlayerBoxService>();
+
 var app = builder.Build();
 
 // The service worker is this app's cache layer, so the browser's own HTTP cache must not
@@ -84,27 +88,7 @@ app.MapGet("/api/playlists", (PlaylistService playlists, HistoryService history)
     {
         id = pl.Id,
         name = pl.Name,
-        tracks = pl.RecordIds
-            .Select(rid => (rid, rec: history.Get(rid)))
-            .Where(x => x.rec is not null)
-            .Select(x => (x.rid, rec: x.rec!, idx: Media.FirstAudioIndex(x.rec!)))
-            // A downloaded track plays from disk; a track that is still only a link plays
-            // via the relay. Either way it has a URL, so the player needs no special case
-            // — the difference shows up as "not saved on this phone", which is the truth.
-            .Where(x => x.idx >= 0 || x.rec.Pending)
-            .Select(x => new
-            {
-                url = x.idx >= 0 ? $"/stream/{x.rid}/{x.idx}" : $"/preview/{x.rid}",
-                pending = x.idx < 0,
-                title = x.rec.Title,
-                // Blanked for uploads, where "Uploaded" is a placeholder rather than an
-                // artist — it would otherwise show as the artist in the player and on
-                // the lock screen.
-                author = TrackVisuals.Artist(x.rec.Author),
-                duration = TrackVisuals.Duration(x.rec.Duration),
-                lyrics = LyricsService.Has(x.rec),
-            })
-            .ToList(),
+        tracks = PlaylistManifest.Tracks(pl, history),
     });
     return Results.Json(result);
 });
@@ -210,7 +194,110 @@ app.MapGet("/listen/{id}", (string id, HistoryService history, HttpRequest req) 
     return Results.Content(ListenPage.Html(rec, idx, baseUrl), "text/html; charset=utf-8");
 });
 
+// --- player boxes ------------------------------------------------------------------
+// A box is any screen left running /player: a TV, a kiosk, a spare phone. It pairs the
+// way MapleKiosk's wall TVs do. An unnamed box shows a code, someone enters that code on
+// the Players page, and from then on the box plays what it is sent.
+
+// The box's page. A plain static page, not Blazor: it must keep playing with no circuit,
+// and through a dropped connection, for hours. The build token is stamped in so its
+// scripts and service worker update with each deploy, like the main app's.
+var boxHtml = new Lazy<string>(() =>
+    File.ReadAllText(Path.Combine(app.Environment.WebRootPath, "box.html")).Replace("{{v}}", BuildInfo.Version));
+app.MapGet("/player", (HttpContext ctx) =>
+{
+    ctx.Response.Headers.CacheControl = "no-cache, must-revalidate";
+    return Results.Content(boxHtml.Value, "text/html; charset=utf-8");
+});
+
+// Check-in, every 15 s: "here I am, this is what I'm playing". The answer is either the
+// code to show or the box's name, plus anything its live stream missed.
+app.MapPost("/api/box/hello", (BoxRequest req, PlayerBoxService boxes) =>
+    PlayerBoxService.IsValidKey(req.Key)
+        ? Results.Json(boxes.Hello(req.Key!, req.Version, req.State))
+        : Results.BadRequest());
+
+// What the box is playing, sent the moment it changes so the Players page keeps up.
+app.MapPost("/api/box/state", (BoxRequest req, PlayerBoxService boxes) =>
+    PlayerBoxService.IsValidKey(req.Key) && req.State is not null && boxes.Report(req.Key!, req.State)
+        ? Results.NoContent()
+        : Results.NotFound());
+
+// The box's command stream (Server-Sent Events). EventSource reconnects by itself, and the
+// "retry" line makes it do so after 3 s rather than the browser's default. A comment line
+// every 15 s keeps proxies from closing a connection that is quiet only because nobody
+// pressed anything.
+app.MapGet("/api/box/events", async (string? key, PlayerBoxService boxes, HttpContext ctx) =>
+{
+    if (!PlayerBoxService.IsValidKey(key)) { ctx.Response.StatusCode = 400; return; }
+    var ct = ctx.RequestAborted;
+    ctx.Response.ContentType = "text/event-stream";
+    ctx.Response.Headers.CacheControl = "no-cache, no-transform";
+    ctx.Response.Headers["X-Accel-Buffering"] = "no";   // nginx: don't buffer the stream
+
+    var (reader, handle) = boxes.Listen(key!);
+    using (handle)
+    {
+        try
+        {
+            await ctx.Response.WriteAsync("retry: 3000\n: open\n\n", ct);
+            await ctx.Response.Body.FlushAsync(ct);
+            // One wait in flight at a time: the channel has a single reader, so a new
+            // WaitToReadAsync must not be started while the previous one is still pending.
+            Task<bool>? waiting = null;
+            while (!ct.IsCancellationRequested)
+            {
+                waiting ??= reader.WaitToReadAsync(ct).AsTask();
+                var first = await Task.WhenAny(waiting, Task.Delay(TimeSpan.FromSeconds(15), ct));
+                if (first == waiting)
+                {
+                    if (!await waiting) break;                     // closed: superseded or released
+                    waiting = null;
+                    while (reader.TryRead(out var msg))
+                        await ctx.Response.WriteAsync($"data: {msg}\n\n", ct);
+                }
+                else
+                {
+                    await ctx.Response.WriteAsync(": ping\n\n", ct);
+                }
+                await ctx.Response.Body.FlushAsync(ct);
+            }
+        }
+        catch (OperationCanceledException) { }   // the box went away; nothing to clean up beyond the handle
+        catch (IOException) { }
+    }
+});
+
+// The controlling side, for plain-JS callers (the "Play on" button on a playlist card).
+// The Players page talks to PlayerBoxService directly.
+app.MapGet("/api/players", (PlayerBoxService boxes) =>
+    Results.Json(boxes.Players().Select(p => new
+    {
+        id = p.DeviceId,
+        name = p.Name,
+        online = p.IsOnline,
+        title = p.State?.Title,
+        playlist = p.State?.PlaylistName,
+        playing = p.State?.Playing ?? false,
+    })));
+
+app.MapPost("/api/players/{id}/play", (string id, CastRequest req, PlayerBoxService boxes,
+    PlaylistService playlists, HistoryService history) =>
+{
+    var pl = playlists.Get(req.PlaylistId ?? "");
+    if (pl is null) return Results.NotFound(new { error = "That playlist no longer exists." });
+    try
+    {
+        var outcome = boxes.Play(id, pl, history, req.Start, req.Shuffle);
+        return Results.Json(new { outcome = outcome.ToString().ToLowerInvariant() });
+    }
+    catch (InvalidOperationException e) { return Results.BadRequest(new { error = e.Message }); }
+});
+
 app.Run();
+
+internal sealed record BoxRequest(string? Key, string? Version, BoxState? State);
+internal sealed record CastRequest(string? PlaylistId, string? Start, bool? Shuffle);
 
 internal static class ListenPage
 {

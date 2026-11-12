@@ -1,0 +1,16 @@
+{
+  "id": "/player",
+  "name": "My Music Player",
+  "short_name": "Player",
+  "description": "A screen that plays My Music, controlled from your phone.",
+  "start_url": "/player",
+  "scope": "/player",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#06070A",
+  "theme_color": "#06070A",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

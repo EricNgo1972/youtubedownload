@@ -1,0 +1,126 @@
+@import url('/fonts.css');
+
+/* ============================================================================
+   Player box: the screen left running on a TV, a kiosk or a spare phone.
+   Read from across a room, never touched except for the one "tap to start",
+   so everything scales with the screen (vmin) rather than sitting at phone size.
+   Same palette and type as the main app.
+   ========================================================================== */
+
+:root {
+    --bg: #06070A;
+    --card: #101216;
+    --line: rgba(255, 255, 255, 0.08);
+    --text: #F2F1EE;
+    --text-2: #B9BDC6;
+    --muted: #8B8F98;
+    --dim: #5C616B;
+    --accent: #C8F04A;
+    --accent-22: rgba(200, 240, 74, 0.22);
+    --on-accent: #0A0B0D;
+    --warn: #FFB86B;
+    --display: 'Space Grotesk', system-ui, sans-serif;
+    --body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--text); font-family: var(--body);
+    /* Nothing on this screen is meant to be selected or dragged. */
+    user-select: none; -webkit-user-select: none;
+}
+
+.box {
+    position: relative; height: 100%;
+    display: flex; flex-direction: column;
+    padding: max(3vmin, env(safe-area-inset-top)) max(4vmin, env(safe-area-inset-right))
+             max(3vmin, env(safe-area-inset-bottom)) max(4vmin, env(safe-area-inset-left));
+}
+
+/* ---------------------------------------------------------------- top -- */
+
+.bx-top { display: flex; align-items: center; justify-content: space-between; gap: 2vmin; flex: 0 0 auto; }
+.bx-name { font-family: var(--display); font-weight: 700; font-size: max(16px, 3vmin); letter-spacing: -.01em; }
+.bx-link { display: flex; align-items: center; gap: 1.2vmin; font-size: max(12px, 2vmin); color: var(--muted); }
+.bx-dot { width: max(8px, 1.3vmin); height: max(8px, 1.3vmin); border-radius: 999px; background: var(--dim); }
+.bx-dot.up { background: var(--accent); }
+.bx-dot.down { background: var(--warn); }
+
+/* -------------------------------------------------------------- panels -- */
+
+.bx-pair, .bx-idle, .bx-now { display: none; flex: 1; min-height: 0; }
+.box[data-mode="pair"] .bx-pair,
+.box[data-mode="idle"] .bx-idle { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.box[data-mode="now"] .bx-now { display: flex; }
+
+.bx-eyebrow {
+    font-size: max(12px, 2.1vmin); letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600;
+}
+
+/* Pairing: the code is the only thing that matters, readable from the far side of a room. */
+.bx-code {
+    margin: 2vmin 0 4vmin;
+    font-family: var(--display); font-weight: 700; color: var(--accent);
+    font-size: min(30vmin, 34vw); line-height: 1; letter-spacing: .08em;
+    font-variant-numeric: tabular-nums;
+}
+.bx-steps { margin: 0; padding: 0 0 0 1.2em; text-align: left; font-size: max(14px, 2.6vmin); line-height: 1.6; color: var(--text-2); }
+.bx-steps b, .bx-idle-sub b { color: var(--text); font-weight: 600; }
+
+.bx-idle-title { font-family: var(--display); font-weight: 700; font-size: max(24px, 7vmin); margin: 1.5vmin 0; }
+.bx-idle-sub { font-size: max(14px, 2.6vmin); color: var(--muted); max-width: 30em; line-height: 1.5; }
+
+/* Now playing. Landscape (a TV): artwork left, words right. Portrait (a phone on a stand):
+   stacked. */
+.bx-now { align-items: center; justify-content: center; gap: 6vmin; }
+.bx-art {
+    flex: 0 0 auto; width: min(58vmin, 42vw); aspect-ratio: 1; border-radius: 4vmin;
+    display: grid; place-items: center;
+    font-family: var(--display); font-weight: 700; font-size: min(20vmin, 15vw); color: rgba(255, 255, 255, .9);
+    background: #2a2f3a; box-shadow: 0 3vmin 8vmin rgba(0, 0, 0, .45);
+}
+.bx-meta { flex: 1; min-width: 0; max-width: 60vw; }
+.bx-from { font-size: max(12px, 2.2vmin); color: var(--muted); letter-spacing: .04em; margin-bottom: 1.5vmin;
+           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bx-title {
+    font-family: var(--display); font-weight: 700; letter-spacing: -.015em;
+    font-size: max(22px, 6.4vmin); line-height: 1.12;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.bx-artist { margin-top: 1.4vmin; font-size: max(15px, 3.4vmin); color: var(--text-2);
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bx-prog { margin-top: 5vmin; height: max(4px, .8vmin); border-radius: 999px; background: rgba(255, 255, 255, .1); overflow: hidden; }
+.bx-fill { height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .25s linear; }
+.bx-times { display: flex; justify-content: space-between; margin-top: 1.4vmin; font-size: max(12px, 2.1vmin);
+            color: var(--muted); font-variant-numeric: tabular-nums; }
+.bx-next { margin-top: 4vmin; font-size: max(13px, 2.3vmin); color: var(--muted);
+           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bx-next b { color: var(--text-2); font-weight: 500; }
+
+@media (orientation: portrait) {
+    .bx-now { flex-direction: column; text-align: center; gap: 5vmin; }
+    .bx-art { width: min(64vw, 46vh); }
+    .bx-meta { max-width: 100%; width: 100%; }
+}
+
+.bx-note { flex: 0 0 auto; min-height: 1.4em; text-align: center; font-size: max(12px, 2.1vmin); color: var(--warn); }
+
+/* -------------------------------------------------------- tap to start -- */
+
+.bx-tap {
+    position: absolute; inset: 0; z-index: 10; width: 100%; border: 0; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2.5vmin;
+    background: rgba(6, 7, 10, .88); color: var(--text); font-family: var(--body);
+}
+.bx-tap[hidden] { display: none; }
+.bx-tap-i {
+    width: max(72px, 18vmin); height: max(72px, 18vmin); border-radius: 999px;
+    display: grid; place-items: center; background: var(--accent); color: var(--on-accent);
+    font-size: max(28px, 7vmin); padding-left: .12em;
+}
+.bx-tap-t { font-family: var(--display); font-weight: 700; font-size: max(20px, 4.6vmin); }
+.bx-tap-s { font-size: max(13px, 2.2vmin); color: var(--muted); }
+.bx-tap:focus-visible .bx-tap-i { outline: 4px solid var(--accent-22); outline-offset: 6px; }

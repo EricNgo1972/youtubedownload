@@ -1,0 +1,445 @@
+@page "/players"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject PlayerBoxService Boxes
+@inject PlaylistService Playlists
+@inject HistoryService History
+@inject IJSRuntime JS
+
+<PageTitle>Players</PageTitle>
+
+@* Remote control lives on the server by nature: every button here is a message to
+   another device, so Blazor handlers are the right tool (unlike the playback controls,
+   which must work with no circuit). *@
+<div class="plr-page">
+
+    @if (_players.Count > 0 && !_showAdd)
+    {
+        <button class="btn-dashed" @onclick="() => _showAdd = true">+ Add player</button>
+    }
+    else
+    {
+        <section class="card plr-add">
+            <div class="row-between">
+                <div class="plr-add-title">Add a player</div>
+                @if (_players.Count > 0)
+                {
+                    <button class="btn-mini" @onclick="CloseAdd">Close</button>
+                }
+            </div>
+            <p class="hint">A player is any screen you leave running: a TV, a kiosk, a spare phone.
+                You control what it plays from here.</p>
+            <ol class="plr-steps">
+                <li>
+                    On the player, open Chrome at:
+                    <div class="plr-url">
+                        <code>@(_origin)/player</code>
+                        <button class="btn-mini" @onclick="CopyUrl">@(_copied ? "Copied" : "Copy")</button>
+                    </div>
+                </li>
+                <li>Install it from Chrome's menu (<b>Install app</b> or <b>Add to Home screen</b>).
+                    It then opens full screen, even after a restart.</li>
+                <li>It shows a 4-digit code. Enter it here and name the player.</li>
+            </ol>
+
+            @if (_waiting.Count > 0)
+            {
+                <div class="plr-waiting">
+                    <span class="eyebrow">Showing a code now</span>
+                    <div class="plr-codes">
+                        @foreach (var w in _waiting)
+                        {
+                            <button class="chip @(w.Code == _code ? "on" : "")" @onclick="() => _code = w.Code">@w.Code</button>
+                        }
+                    </div>
+                </div>
+            }
+
+            <div class="plr-form">
+                <input class="text-input plr-code-in" placeholder="Code" inputmode="numeric" maxlength="4"
+                       autocomplete="off" @bind="_code" @bind:event="oninput" />
+                <input class="text-input" placeholder="Name, such as Lobby" maxlength="40"
+                       autocomplete="off" @bind="_name" @bind:event="oninput" @onkeydown="PairOnEnter" />
+            </div>
+            @if (_players.Any(p => string.Equals(p.Name, _name?.Trim(), StringComparison.OrdinalIgnoreCase)))
+            {
+                <div class="hint hint-warn">This box replaces the current @_name.Trim(). The old one goes back to showing a code.</div>
+            }
+            @if (_addError is not null)
+            {
+                <div class="job-error">@_addError</div>
+            }
+            <div class="actions">
+                <button class="btn" @onclick="Pair" disabled="@(!CanPair)">Pair player</button>
+            </div>
+        </section>
+    }
+
+    @foreach (var p in _players)
+    {
+        var st = p.State;
+        var playing = st is { Playing: true };
+        var hasTrack = st is { Url: not null };
+        <section class="card plr-card @(playing ? "is-playing" : "")">
+            <div class="plr-head">
+                <span class="plr-dot @(p.IsOnline ? "on" : "")"></span>
+                <div class="plr-id">
+                    <div class="plr-name">@p.Name</div>
+                    <div class="plr-sub">@Status(p)</div>
+                </div>
+            </div>
+
+            @if (p.IsOnline && hasTrack)
+            {
+                <div class="plr-now">
+                    <span class="trk-art" style="background:@TrackVisuals.Tint(RecordId(st!.Url))">@TrackVisuals.Mono(st.Title ?? "")</span>
+                    <div class="plr-now-main">
+                        <div class="plr-title">@st.Title</div>
+                        <div class="plr-meta">
+                            @(string.IsNullOrEmpty(st.Author) ? "" : st.Author + " · ")from @st.PlaylistName
+                            @if (st.Count > 1) { <span> · @(st.Index + 1) of @st.Count</span> }
+                        </div>
+                    </div>
+                </div>
+                var pos = Position(p);
+                <div class="bar"><div class="fill" style="width:@Pct(pos, st.Dur)%"></div></div>
+                <div class="plr-times"><span>@Fmt(pos)</span><span>@(st.Dur > 0 ? Fmt(st.Dur) : "")</span></div>
+
+                @if (st.NeedsTap)
+                {
+                    <div class="plr-alert">Waiting for a tap on its screen. The browser blocks sound until someone touches it once.</div>
+                }
+                @if (!string.IsNullOrEmpty(st.Note))
+                {
+                    <div class="plr-alert">@st.Note</div>
+                }
+
+                <div class="plr-ctl">
+                    <button class="plr-btn" title="Previous" @onclick='() => Cmd(p, new { type = "prev" })'>◀◀</button>
+                    <button class="plr-btn plr-main" title="Play/Pause" @onclick='() => Cmd(p, new { type = "toggle" })'>@(playing ? "❙❙" : "▶")</button>
+                    <button class="plr-btn" title="Next" @onclick='() => Cmd(p, new { type = "next" })'>▶▶</button>
+                    <button class="plr-btn @(st.Shuffle ? "on" : "")" title="Shuffle"
+                            @onclick='() => Cmd(p, new { type = "shuffle", on = !st.Shuffle })'>⤮</button>
+                    <label class="plr-vol" title="Volume">
+                        <span>🔈</span>
+                        <input type="range" min="0" max="100" step="5" value="@((int)Math.Round(st.Volume * 100))"
+                               @onchange="e => Volume(p, e)" />
+                    </label>
+                </div>
+                @if (st.Count > 0)
+                {
+                    <div class="plr-saved hint">@SavedText(st)</div>
+                }
+            }
+
+            @if (p.IsOnline)
+            {
+                <div class="plr-pick">
+                    <select class="text-input" value="@Picked(p)" @onchange="e => _pick[p.DeviceId] = e.Value?.ToString() ?? string.Empty">
+                        @foreach (var pl in _playlists)
+                        {
+                            <option value="@pl.Id">@pl.Name</option>
+                        }
+                    </select>
+                    <button class="btn" @onclick="() => PlayOn(p)" disabled="@(_playlists.Count == 0)">Play</button>
+                </div>
+            }
+
+            @if (_flash.TryGetValue(p.DeviceId, out var msg))
+            {
+                <div class="plr-flash">@msg</div>
+            }
+
+            <div class="plr-foot">
+                @if (hasTrack && p.IsOnline)
+                {
+                    <button class="btn-mini" @onclick='() => Cmd(p, new { type = "stop" })'>Stop</button>
+                }
+                <button class="btn-mini" @onclick="() => Reload(p)">Reload</button>
+                <button class="btn-mini" @onclick="() => OpenRename(p)">Rename</button>
+                <button class="btn-mini" @onclick="() => _releasing = p">Release</button>
+            </div>
+        </section>
+    }
+</div>
+
+@if (_renaming is not null)
+{
+    <div class="modal-scrim" @onclick="() => _renaming = null"></div>
+    <div class="modal modal-sm" role="dialog" aria-modal="true">
+        <div class="modal-head"><span>Rename player</span></div>
+        <input class="text-input" maxlength="40" autofocus @bind="_renameTo" @bind:event="oninput" />
+        @if (_renameError is not null) { <div class="job-error">@_renameError</div> }
+        <div class="modal-foot">
+            <span></span>
+            <div class="modal-foot-btns">
+                <button class="btn-mini" @onclick="() => _renaming = null">Cancel</button>
+                <button class="btn" @onclick="Rename" disabled="@string.IsNullOrWhiteSpace(_renameTo)">Save</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (_releasing is not null)
+{
+    <div class="modal-scrim" @onclick="() => _releasing = null"></div>
+    <div class="modal modal-sm" role="dialog" aria-modal="true">
+        <div class="modal-head"><span>Release @_releasing.Name?</span></div>
+        <p class="confirm-text">It stops playing, deletes the music saved on it, and goes back to showing a code.
+            You can pair it again at any time.</p>
+        <div class="modal-foot">
+            <span></span>
+            <div class="modal-foot-btns">
+                <button class="btn-mini" @onclick="() => _releasing = null">Cancel</button>
+                <button class="btn-danger" @onclick="Release">Release</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private IReadOnlyList<PlayerView> _players = [];
+    private IReadOnlyList<WaitingBox> _waiting = [];
+    private IReadOnlyList<Playlist> _playlists = [];
+    private readonly Dictionary<string, string> _pick = new();
+    private readonly Dictionary<string, string> _flash = new();
+
+    private bool _showAdd;
+    private string? _code, _name, _addError;
+    private string _origin = "";
+    private bool _copied;
+
+    private PlayerView? _renaming, _releasing;
+    private string? _renameTo, _renameError;
+
+    private Timer? _tick;
+    private int _dirty;
+
+    private bool CanPair => (_code?.Trim().Length ?? 0) == 4 && !string.IsNullOrWhiteSpace(_name);
+
+    protected override void OnInitialized()
+    {
+        Load();
+        Boxes.Changed += OnChanged;
+        // Once a second: the progress bars move between state reports, and boxes waiting
+        // with a code come and go. Cheap, and only redraws when something is on screen.
+        _tick = new Timer(_ => Tick(), null, 1000, 1000);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        // The address as the browser sees it. Behind the fleet's TLS proxy the server's own
+        // idea of its scheme is http, which is not the address anyone should type.
+        try { _origin = await JS.InvokeAsync<string>("ytdlCast.origin"); }
+        catch (JSException) { }
+        StateHasChanged();
+    }
+
+    private void Load()
+    {
+        _players = Boxes.Players();
+        _waiting = Boxes.Waiting();
+        _playlists = Playlists.All();
+        if (_players.Count == 0) _showAdd = true;
+    }
+
+    private void OnChanged() => Interlocked.Exchange(ref _dirty, 1);
+
+    private void Tick()
+    {
+        var changed = Interlocked.Exchange(ref _dirty, 0) == 1;
+        var moving = _players.Any(p => p.State is { Playing: true });
+        if (!changed && !moving && !_showAdd) return;
+        _ = InvokeAsync(() =>
+        {
+            if (changed || _showAdd) Load();
+            StateHasChanged();
+        });
+    }
+
+    // --- pairing ---------------------------------------------------------------------
+
+    private async Task Pair()
+    {
+        if (!CanPair) return;
+        _addError = null;
+        try
+        {
+            var p = await Boxes.PairAsync(_code!.Trim(), _name!.Trim());
+            Flash(p.DeviceId, "Paired. Pick a playlist to start it.");
+            _code = _name = null;
+            _showAdd = false;
+            Load();
+        }
+        catch (InvalidOperationException e) { _addError = e.Message; }
+    }
+
+    private async Task PairOnEnter(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Pair();
+    }
+
+    private void CloseAdd()
+    {
+        _showAdd = false;
+        _addError = null;
+    }
+
+    private async Task CopyUrl()
+    {
+        try { await JS.InvokeVoidAsync("ytdlCast.copy", _origin + "/player"); _copied = true; }
+        catch (JSException) { }
+    }
+
+    // --- controlling -----------------------------------------------------------------
+
+    private void Cmd(PlayerView p, object command) => Report(p, Boxes.Send(p.DeviceId, command), quietWhenDelivered: true);
+
+    private void Volume(PlayerView p, ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var v))
+            Cmd(p, new { type = "volume", value = Math.Clamp(v / 100, 0, 1) });
+    }
+
+    private string Picked(PlayerView p)
+    {
+        if (_pick.TryGetValue(p.DeviceId, out var id) && _playlists.Any(x => x.Id == id)) return id;
+        // Default to what it is already playing, so "Play" restarts the same list.
+        var current = p.State?.PlaylistId;
+        if (current is not null && _playlists.Any(x => x.Id == current)) return current;
+        return _playlists.FirstOrDefault()?.Id ?? "";
+    }
+
+    private void PlayOn(PlayerView p)
+    {
+        var pl = Playlists.Get(Picked(p));
+        if (pl is null) return;
+        try
+        {
+            var outcome = Boxes.Play(p.DeviceId, pl, History);
+            Report(p, outcome, quietWhenDelivered: false, what: $"Playing {pl.Name}");
+        }
+        catch (InvalidOperationException e) { Flash(p.DeviceId, e.Message); }
+    }
+
+    private void Reload(PlayerView p)
+    {
+        var o = Boxes.Reload(p.DeviceId);
+        Flash(p.DeviceId, o == SendOutcome.Delivered ? "Reloading…" : $"{p.Name} reloads when it next checks in.");
+    }
+
+    private void Report(PlayerView p, SendOutcome o, bool quietWhenDelivered, string? what = null)
+    {
+        switch (o)
+        {
+            case SendOutcome.Delivered:
+                if (!quietWhenDelivered) Flash(p.DeviceId, what ?? "Sent.");
+                else _flash.Remove(p.DeviceId);
+                break;
+            case SendOutcome.Queued:
+                Flash(p.DeviceId, $"{p.Name}'s connection is catching up. It will get this within 15 seconds.");
+                break;
+            default:
+                Flash(p.DeviceId, $"{p.Name} isn't connected right now.");
+                break;
+        }
+    }
+
+    private void Flash(string deviceId, string msg)
+    {
+        _flash[deviceId] = msg;
+        _ = Task.Delay(5000).ContinueWith(_ => InvokeAsync(() =>
+        {
+            if (_flash.TryGetValue(deviceId, out var m) && m == msg) { _flash.Remove(deviceId); StateHasChanged(); }
+        }));
+    }
+
+    // --- rename / release ------------------------------------------------------------
+
+    private void OpenRename(PlayerView p)
+    {
+        _renaming = p;
+        _renameTo = p.Name;
+        _renameError = null;
+    }
+
+    private async Task Rename()
+    {
+        if (_renaming is null || string.IsNullOrWhiteSpace(_renameTo)) return;
+        try
+        {
+            await Boxes.RenameAsync(_renaming.DeviceId, _renameTo);
+            _renaming = null;
+            Load();
+        }
+        catch (InvalidOperationException e) { _renameError = e.Message; }
+    }
+
+    private async Task Release()
+    {
+        if (_releasing is null) return;
+        await Boxes.ReleaseAsync(_releasing.DeviceId);
+        _releasing = null;
+        Load();
+    }
+
+    // --- display ---------------------------------------------------------------------
+
+    private static string Status(PlayerView p)
+    {
+        if (!p.IsOnline)
+            return p.LastSeenUtc is { } seen ? $"Offline · last seen {Ago(seen)}" : "Offline · not seen since the server started";
+        var st = p.State;
+        if (st is null || st.Url is null) return "Online · nothing playing";
+        if (st.NeedsTap) return "Online · waiting for a tap";
+        return st.Playing ? "Playing" : "Paused";
+    }
+
+    private static string Ago(DateTime utc)
+    {
+        var d = DateTime.UtcNow - utc;
+        if (d.TotalMinutes < 1) return "just now";
+        if (d.TotalHours < 1) return $"{(int)d.TotalMinutes} min ago";
+        if (d.TotalDays < 1) return $"{(int)d.TotalHours} h ago";
+        return utc.ToLocalTime().ToString("MMM d, HH:mm");
+    }
+
+    private static double Position(PlayerView p)
+    {
+        var st = p.State!;
+        var pos = st.Pos;
+        // Between reports, carry the position forward at the speed of time, so the bar
+        // moves smoothly instead of jumping every 10 seconds.
+        if (st.Playing && p.StateUtc is { } at) pos += (DateTime.UtcNow - at).TotalSeconds;
+        return st.Dur > 0 ? Math.Min(pos, st.Dur) : pos;
+    }
+
+    private static string Pct(double pos, double dur) =>
+        (dur > 0 ? Math.Clamp(pos / dur * 100, 0, 100) : 0).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string Fmt(double s)
+    {
+        if (double.IsNaN(s) || s < 0) s = 0;
+        var t = TimeSpan.FromSeconds(s);
+        return t.TotalHours >= 1 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes}:{t.Seconds:00}";
+    }
+
+    private static string SavedText(BoxState st) =>
+        st.Saved >= st.Count ? "Whole playlist saved on the player. It keeps playing if the Wi-Fi drops."
+        : st.Saved == 0 ? "Saving the playlist onto the player…"
+        : $"Saved on the player: {st.Saved} of {st.Count} tracks.";
+
+    private static string RecordId(string? url)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(url ?? "", "/(?:stream|preview)/([^/]+)");
+        return m.Success ? m.Groups[1].Value : url ?? "";
+    }
+
+    public void Dispose()
+    {
+        Boxes.Changed -= OnChanged;
+        _tick?.Dispose();
+    }
+}

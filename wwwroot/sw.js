@@ -54,12 +54,18 @@ const SHELL_ASSETS = [
   '/player.js',
   '/playlist-offline.js',
   '/share.js',
+  '/cast.js',
   '/reconnect.js',
   '/pwa-install.js',
   '/app.css',
   '/fonts.css',
   '/icon.svg',
   '/manifest.webmanifest',
+  // The player box (/player). Its page is cached like any other navigation; these are
+  // what it needs to boot into a dead network after a power cut and carry on playing.
+  '/box.js',
+  '/box.css',
+  '/box.webmanifest',
   // Self-hosted faces. Precached with the shell so type renders identically offline
   // rather than falling back to a system font mid-trip.
   '/fonts/space-grotesk-500-latin.woff2',
@@ -173,7 +179,9 @@ async function serveNavigation(request) {
     return res;
   } catch (e) {
     return (await cache.match(cacheKey))
-        || (await cache.match(HOME))                    // any page beats none
+        // Any page beats none, except on a player box, where the phone app showing on a
+        // TV would only confuse. A box always has its own page cached after its first load.
+        || (cacheKey !== '/player' && await cache.match(HOME))
         || new Response(OFFLINE_HTML, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
   }
 }
